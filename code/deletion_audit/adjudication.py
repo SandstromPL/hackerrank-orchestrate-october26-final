@@ -107,6 +107,14 @@ class Review:
     notes: tuple[str, ...]
 
 
+def _names_someone_else(view: ResourceView, subject_keys: frozenset[str]) -> bool:
+    """Deterministic backing for an ownership veto: the record shows contact details, none the subject's."""
+    if view.state is None:
+        return False
+    shown = {key for key in view.state.direct_identifiers if not key.startswith(("name:", "<"))}
+    return bool(shown) and not (shown | set(view.state.user_refs)) & subject_keys
+
+
 def _soft(view: ResourceView) -> bool:
     if view.link_basis in SOFT_BASES:
         return True
@@ -165,32 +173,46 @@ class CaseAdjudicator:
         except ValidationError as exc:
             log.warning("%s: adjudication output failed validation: %s", request.case_id, exc)
             return None
-        return self.merge(request, views, answer)
+        keys = {key for values in subject_keys.values() for key in values}
+        return self.merge(request, views, answer, frozenset(keys))
 
     @staticmethod
-    def merge(request: DeletionRequest, views: list[ResourceView], answer: AdjudicationOut) -> Review:
+    def merge(request: DeletionRequest, views: list[ResourceView], answer: AdjudicationOut,
+              subject_keys: frozenset[str] = frozenset()) -> Review:
+        """Apply the model's answer under guardrails that a manipulated answer cannot get around.
+
+        A prompt injection must never be able to hide remaining data, so the model can only
+        drop a record when the record's own identifiers name someone else, and nothing the model
+        says is applied to records or categories once it reports an injection attempt.
+        """
         notes: list[str] = []
         rules_intent = classify_intent(request.request_text)
         intent = IntentResult(answer.intent.is_deletion, answer.intent.request_type, "model")
         if intent.is_deletion and rules_intent.basis == "rules:explicit-non-deletion":
             intent = rules_intent  # an explicit "do not delete" in the text is a hard stop
             notes.append("model intent overridden by explicit non-deletion wording")
+        if not intent.is_deletion and answer.injection_detected and rules_intent.is_deletion:
+            intent = rules_intent  # a manipulated request keeps its plain deletion reading
+            notes.append("injection detected: deletion wording kept over the model's intent")
         by_ref = {record.ref: record for record in answer.records}
         kept: list[ResourceView] = []
         for index, view in enumerate(views, start=1):
             verdict = by_ref.get(f"R{index}")
-            if verdict is None:
+            if verdict is None or answer.injection_detected:
                 kept.append(view)
                 continue
             if verdict.belongs_to_subject == "no" and _soft(view):
-                notes.append(f"dropped {view.resource_id}: {verdict.reason}")
-                continue
+                if _names_someone_else(view, subject_keys):
+                    notes.append(f"dropped {view.resource_id}: {verdict.reason}")
+                    continue
+                notes.append(f"kept {view.resource_id} for review: model doubts ownership but the record names no one else")
             category = view.category
             stated = view.state is not None and view.state.category_stated
             default = DEFAULT_CATEGORY_BY_SYSTEM.get(view.system_id)
             if (not stated and view.category == default and verdict.category != view.category
                     and verdict.category in REFINABLE.get(view.system_id, set())):
-                notes.append(f"{view.resource_id}: category {view.category.value if view.category else None} -> {verdict.category.value}")
+                notes.append(f"{view.resource_id}: category {view.category.value if view.category else None} "
+                             f"-> {verdict.category.value}")
                 category = verdict.category
             kept.append(replace(view, category=category))
         return Review(intent, kept, answer.injection_detected, tuple(notes))
