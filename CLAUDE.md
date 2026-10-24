@@ -71,7 +71,7 @@ Draft from 2026-10-24, based on the contract docs and a pass over `dataset/`. Pa
     - connector `enabled=true` → ACTIVE_DATA_FLOW
     - `restore_allowed=true` → RESTORE_RISK (the backup itself is RETAINed)
     - audit record → RETAIN
-  - COMPLETE ⇔ zero findings, otherwise INCOMPLETE. `reported_status` is ignored: case_25 is reported NOT_STARTED but is COMPLETE, and case_05 is reported COMPLETE but is INCOMPLETE.
+  - COMPLETE ⇔ zero findings, otherwise INCOMPLETE. `reported_status` is ignored: case_25 is reported NOT_STARTED but is COMPLETE, and case_05 is reported COMPLETE but is INCOMPLETE. One exception, `follow_claim_when_nothing_established` (decided 2026-10-24): when no record's state is established for a resolved subject, the claim decides. COMPLETE stays COMPLETE (case_04: nothing linkable, truly COMPLETE), and NOT_STARTED or PARTIALLY_COMPLETE become INCOMPLETE (eval case_63).
 - **Step schema, operations, and ordering rules:**
   - Each step has exactly 7 keys. Phases run FINDING → REMEDIATION → VERIFICATION. Within a phase, sort by the operation's position in the spec table, then `system_id`, then `resource_id`. `step_no` runs 1..n.
   - Each finding maps 1:1 to a remediation: REMAINING→DELETE, EXPOSED_PII→REDACT or ANONYMIZE (per rule), ACTIVE_DATA_FLOW→DISABLE, RESTORE_RISK→BLOCK.
@@ -93,7 +93,7 @@ Draft from 2026-10-24, based on the contract docs and a pass over `dataset/`. Pa
   - **(open)** Is `resource_id` sorted as a string or a number? No sample has two resources with the same op and system. Plan: plain string sort.
   - **(open)** Which file to cite when several prove the same state, or when the account is never mentioned at all. case_04 cites evidence_54, not the later evidence_90.
   - **(open)** 34 of the 152 sample finding/verification steps (22%) have no identifier link in pre-audit evidence. Absent accounts and anonymized analytics show up only in deletion-worker rows inside batch windows shared by up to 6 cases. `audit_record_6645` and `audit_record_5569` appear in no participant file at all. This puts a hard ceiling on step accuracy.
-  - **(open)** For `marketing_001`, the catalog says the record belongs to kwame-mensah/user_09, but the screenshot shows Soo-jin Park / sj.park@naver.com (eval case_63).
+  - **(decided 2026-10-24, option 3)** For `marketing_001`, the catalog says the record belongs to kwame-mensah/user_09, but the screenshot shows Soo-jin Park / sj.park@naver.com (eval case_63). The screen contradicts the claim, so it stays rejected. With nothing established, case_63 follows its NOT_STARTED claim: INCOMPLETE `[]`.
   - **(open)** evidence_02's manifest `captured_at` (09-17) differs from its inner snapshot times (09-09…09-17). Plan: the manifest time controls citation.
 - **Exact deadline:** ≈ 2026-10-25 18:00 IST per Paritosh, unconfirmed (the repo doesn't configure it). Target submit time is 17:30.
 

@@ -26,7 +26,7 @@ The challenge contract is in `problem_statement.md` and `AGENTS.md` in the chall
 |---|---|
 | 32 public samples (scored against `sample_output.csv`) | status accuracy 1.000, step precision / recall / F1 1.000 / 0.896 / 0.945, sequence accuracy 0.562 (18/32), 0 contract violations |
 | 4 hand-built cases (`code/evaluation/custom_cases.py`) | status accuracy 0.750 code-only, 1.000 with the model review |
-| Final full run (518 requests) | 154 COMPLETE, 354 INCOMPLETE, 10 NOT_APPLICABLE, 2,855 steps, 0 contract violations, all 1,073 citations exist and predate `audit_at`; 36 min, 530 billed model calls, $0.315 |
+| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,855 steps, 0 contract violations, all 1,073 citations exist and predate `audit_at`. Model answers came from a 36-minute live run (530 billed calls, $0.315) and were replayed from the cache for the final file. |
 
 Details: [`code/evaluation/evaluation_report.md`](code/evaluation/evaluation_report.md) and
 [`code/evaluation/usage_report.md`](code/evaluation/usage_report.md).
@@ -88,7 +88,7 @@ python3 code/main.py --requests dataset/sample_deletion_requests.csv --output /t
 python3 code/evaluation/main.py                       # score samples + custom cases
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # one-flag ablation
 python3 code/evaluation/usage_summary.py --write      # usage_report.md from the latest full run
-python3 -m pytest -q code/tests                       # 17 unit tests, offline
+python3 -m pytest -q code/tests                       # 18 unit tests, offline
 ```
 
 A full run with the model makes one review call per case, one at a time. It logs progress every 50
@@ -189,7 +189,12 @@ Code applies the review under rules that a manipulated answer cannot get around
 - **Claims are not proof.** Reported statuses and `reported_result` values never establish state.
   Activity rows serve four purposes only: as catalog links, as point-in-time checks when no
   evidence file covers the record, for pairing workflow batches with requests, and to show the
-  model the workflow's requested operation as context.
+  model the workflow's requested operation as context. There is one exception
+  (`follow_claim_when_nothing_established`). When not a single record's state is established for
+  the subject, the evidence can neither confirm nor refute the workflow, so its own claim decides
+  the status: COMPLETE stands, and NOT_STARTED or PARTIALLY_COMPLETE give `INCOMPLETE` with no
+  steps. Sample case_04 (nothing linkable, claimed COMPLETE) is truly COMPLETE. A stricter rule,
+  "no proof means INCOMPLETE", would get it wrong.
 - **Linking and state use different windows.** Identity is stable, so any evidence captured by
   `audit_at` can link a record. State comes only from observations made between `requested_at` and
   `audit_at`, because earlier evidence shows the pre-deletion state. A record seen only before the
@@ -224,7 +229,8 @@ Code applies the review under rules that a manipulated answer cannot get around
   - enabled data flow → disable;
   - backup with restore allowed → block the restore (the backup itself is retained).
 
-  `COMPLETE` means zero findings.
+  `COMPLETE` means zero findings. When nothing at all is established, the claim fallback above
+  applies.
 - **Steps and citations.**
   - `COMPLETE` rows contain only verification steps, each citing the evidence of the current state.
   - `INCOMPLETE` rows contain findings that cite evidence, one remediation per finding, and
@@ -256,12 +262,13 @@ Code applies the review under rules that a manipulated answer cannot get around
   output), cost per purpose, per model and overall, per-request averages, and pricing. Answers
   replayed from the cache are counted at the cost of the call that originally produced them, so
   the totals cover everything behind `output.csv`.
-- **Tests** (`code/tests/`, 17, offline) cover:
+- **Tests** (`code/tests/`, 18, offline) cover:
   - policy decisions and step ordering;
   - intent rules;
   - six log layouts;
   - the merge guardrails, including injection;
   - screenshot anchoring;
+  - the claim fallback when nothing is established;
   - client retries, caching, provider selection and pricing;
   - the usage-report join.
 
@@ -276,9 +283,11 @@ Code applies the review under rules that a manipulated answer cannot get around
   account, and batch recovery could not assign one unambiguously. Another 170 accounts come from
   workflow-batch recovery, which infers the pairing from workflow claims rather than proving it
   from evidence.
-- **case_63 is `COMPLETE` with no steps.** Its only candidate record (`marketing_001`) is claimed
-  for the subject by the data catalog, but the screenshot shows a different person, so the claim
-  is rejected and nothing is left to verify.
+- **case_63 is `INCOMPLETE` with no steps.** Its only candidate record (`marketing_001`) is
+  claimed for the subject by the data catalog, but the screenshot shows a different person, so the
+  claim is rejected. With nothing established, the workflow's NOT_STARTED claim decides the
+  status. Every sample answer has an account step, and nothing in the data names this subject's
+  account.
 - **The model changed little on this data.** It changed 1 of 518 eval outputs (case_34, a support
   attachment visible only in a screenshot) and 0 of 32 samples. It agreed with the rule classifier
   on intent in all 518 cases. Its measured value is on non-English negations and injected
@@ -292,7 +301,8 @@ Code applies the review under rules that a manipulated answer cannot get around
   - `resource_id` ties sort as strings;
   - a file is usable only when its manifest `captured_at` is at or before `audit_at`, even if
     its inner timestamps are earlier;
-  - when several observations prove the same state, the latest is cited.
+  - when several observations prove the same state, the latest is cited;
+  - with no record established, the workflow's claim decides the status.
 
 ## Repository layout
 
@@ -322,7 +332,7 @@ code/
 │   ├── usage_summary.py        builds usage_report.md
 │   ├── evaluation_report.md
 │   └── usage_report.md
-└── tests/                      17 offline unit tests
+└── tests/                      18 offline unit tests
 ```
 
 ## Packaging `code.zip`

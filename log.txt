@@ -215,3 +215,67 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T16:27:41+00:00] Options for case_63 (catalog claim vs screenshot)
+
+User Prompt (verbatim, secrets redacted):
+Before packaging, give me options for case_63 (COMPLETE with no steps because the marketing_001 catalog claim is rejected).
+
+Agent Response Summary:
+I traced case_63 (Kwame Mensah, user_09, reported NOT_STARTED). No evidence file contains his identifiers; the four similar-name matches are decoys. There are no deletion-worker rows near his report time and no other request shares his batch. His only lead is catalog row activity_4008, which claims marketing_001 for him. The screenshot it anchors (evidence_60, 16 Sep, inside the audit window) shows a live marketing profile for Soo-jin Park, and her email and phone exist nowhere else in the dataset. In the samples, 7 of 10 NOT_STARTED cases are truly INCOMPLETE, every case has an account step, and case_04 (nothing linkable, reported COMPLETE) is truly COMPLETE. I prototyped the rules in scratch code without changing the repo. Trusting the catalog when the screen shows only unknown people changes only case_63 (INCOMPLETE with marketing_001 steps) and no samples. A generic "no proof means INCOMPLETE" rule wrongly flips sample case_04, so I rejected it in favour of "with no established record, the status follows the workflow's claim", which changes only case_63 to INCOMPLETE []. I recommended that last option and left the choice to Paritosh.
+
+Actions:
+* Read the case_63 request, identity, catalog rows, evidence_60 (image, vision transcript, OCR), activity near reported_at, and the hand-made evidence files 55, 58, 60 and 61
+* Compared samples: reported_status versus true status, case_04 and case_07
+* Prototyped both rules in scratchpad case63_options.py with code-only diffs (0 model calls); no repo changes
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T16:32:32+00:00] Metric impact of each case_63 option
+
+User Prompt (verbatim, secrets redacted):
+by what matrics changes will happen with each chsnges merntioned above
+
+Agent Response Summary:
+I scored every option with the project's scorer (Report.metrics) in separate processes. Samples and custom cases used the model answers from the response cache behind an abort-on-cache-miss guard (0 live calls); the 518 eval cases ran code-only. Measured: options 1, 2 and 3 are identical on all metrics for the 32 samples (status 1.000, step P/R/F1 1.000/0.896/0.945, sequence 0.562) and the 4 custom cases (status 1.000, F1 0.968, sequence 0.750). The rejected "no proof means INCOMPLETE" rule lowers sample status to 0.969 because of case_04. On the unlabeled eval set only case_63 changes. I modeled three possible true answers with sample-like precision and recall as the baseline. One case moves status accuracy by 0.193 points. Options 2 and 3 are right in two of the three scenarios, giving an expected +0.135 points against option 1. Option 2's three extra steps move F1 by +0.0005 if the catalog reading is right and by -0.0005 otherwise. No option changes sequence accuracy.
+
+Actions:
+* Scratchpad option_metrics.py: four variants (keep, catalog, claim fallback, generic) scored with evaluation.scoring; 0 live model calls
+* Scratchpad scenario model for the eval-set deltas (status accuracy, step precision/recall/F1, sequence)
+* No repo changes besides this log entry
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T16:37:13+00:00] Implement case_63 option 3: claim decides when nothing is established
+
+User Prompt (verbatim, secrets redacted):
+Implement option 3: when no record's state is established for a resolved deletion subject, the status follows the workflow's claim (COMPLETE stays COMPLETE, otherwise INCOMPLETE with []). Add it as an AuditPolicy flag with a unit test, run the eval for the delta, update the docs, and commit.
+
+Agent Response Summary:
+I added the AuditPolicy flag follow_claim_when_nothing_established (default on). steps.status_for now takes an optional claimed_status that applies only when there are no decisions, and the pipeline passes the claim when the flag is on and adds a case note. A new unit test covers both ways the claim is ignored once any record is established (18 tests pass). Eval delta: samples and custom cases are unchanged with the flag on and off (status 1.000/1.000, step F1 0.945/0.968, sequence 0.562/0.750), with 0 billed calls. I regenerated output.csv from the response cache (run 20261024T163504Z, 529 answers replayed, 0 billed calls). Only case_63 changed, from COMPLETE to INCOMPLETE []; statuses are now 153/355/10, there are 0 violations, and all 1,073 citations are valid. usage_report.md was regenerated and now also states when the replayed answers were billed; the totals are unchanged at $0.315. README, the evaluation report and CLAUDE.md §5 are updated.
+
+Actions:
+* code/deletion_audit/config.py (flag), steps.py (status_for claimed_status), pipeline.py (wiring and note); code/tests/test_pipeline_rules.py (new test)
+* code/evaluation/main.py runs labelled claim-fallback and ablation-claim-fallback-off; .venv/bin/python code/main.py regenerated output.csv from cache
+* code/evaluation/usage_summary.py (replay-billing note) and a regenerated usage_report.md; README.md, evaluation_report.md (status, final-run section, iteration log, ablation, failure 9) and CLAUDE.md §5 updated
+* Committed
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

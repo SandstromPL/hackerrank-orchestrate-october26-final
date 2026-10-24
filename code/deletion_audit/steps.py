@@ -10,7 +10,15 @@ from .policy import Decision
 ALWAYS_VERIFIED_SYSTEMS = {"account_service"}
 
 
-def status_for(decisions: list[Decision]) -> DeletionStatus:
+def status_for(decisions: list[Decision], claimed_status: str | None = None) -> DeletionStatus:
+    """COMPLETE iff no record has a finding.
+
+    `claimed_status` (the workflow's reported_status) is only a fallback for when no record's state
+    is established at all: a COMPLETE claim stands, any other claim means INCOMPLETE. Once any
+    record is established, the evidence alone decides.
+    """
+    if not decisions and claimed_status is not None:
+        return DeletionStatus.COMPLETE if claimed_status == DeletionStatus.COMPLETE.value else DeletionStatus.INCOMPLETE
     return DeletionStatus.INCOMPLETE if any(not d.compliant for d in decisions) else DeletionStatus.COMPLETE
 
 

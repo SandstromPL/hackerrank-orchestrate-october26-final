@@ -27,6 +27,11 @@ class AuditPolicy:
     # When pairing batch rows with requests, require the account step's reported result to agree
     # with the request's reported_status (COMPLETE<->SUCCESS, NOT_STARTED<->FAILED, ...).
     match_workflow_outcome: bool = True
+    # When no record's state is established for a resolved subject, the evidence can neither confirm
+    # nor refute the workflow, so its own claim decides: COMPLETE stands (sample case_04 is COMPLETE
+    # with nothing linkable), NOT_STARTED / PARTIALLY_COMPLETE mean INCOMPLETE. Once any record is
+    # established the claim is ignored.
+    follow_claim_when_nothing_established: bool = True
 
 
 DEFAULT_POLICY = AuditPolicy()

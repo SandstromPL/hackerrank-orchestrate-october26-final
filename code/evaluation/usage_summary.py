@@ -76,6 +76,17 @@ def table(groups: list[tuple[str, list[dict]]], cases: int) -> list[str]:
     return lines
 
 
+def replay_note(replayed: list[dict]) -> list[str]:
+    """When the replayed answers were billed (calls are timestamped since the run-record change)."""
+    if not replayed:
+        return []
+    stamps = sorted(row["at"] for row in replayed if row.get("at"))
+    when = f"{len(stamps)} between {stamps[0]} and {stamps[-1]} (UTC)" if stamps else "none timestamped"
+    return [f"Replayed answers were billed by earlier runs: {len(replayed)} calls, {when}"
+            + (f", {len(replayed) - len(stamps)} before calls were timestamped." if len(stamps) < len(replayed) else "."),
+            ""]
+
+
 def build_report(run: dict, rows: list[tuple[str, dict]], record_name: str) -> str:
     cases = run["cases"]
     answers: dict[str, int] = defaultdict(int)
@@ -146,6 +157,7 @@ def build_report(run: dict, rows: list[tuple[str, dict]], record_name: str) -> s
         "",
         *table([(SOURCE_LABELS[s], by_source[s]) for s in ("live", "cache", "failed") if by_source[s]], cases),
         "",
+        *replay_note(by_source["cache"]),
         "## Pricing and latency",
         "",
         f"- `{run['model']}` (USD per million tokens): {price.get('input', 0):.3f} input on a cache miss, "

@@ -94,6 +94,17 @@ def test_complete_case_cites_evidence_on_every_verification():
                       "operation": "VERIFY_RECORD_ABSENT", "state": "ABSENT", "evidence_id": "evidence_99"}]
 
 
+def test_claim_decides_only_when_no_record_is_established():
+    assert status_for([], "NOT_STARTED") == DeletionStatus.INCOMPLETE  # the workflow admits it never ran
+    assert status_for([], "PARTIALLY_COMPLETE") == DeletionStatus.INCOMPLETE
+    assert status_for([], "COMPLETE") == DeletionStatus.COMPLETE  # sample case_04: nothing linkable, truly COMPLETE
+    assert status_for([]) == DeletionStatus.COMPLETE  # flag off: the vacuous reading
+    remaining = [decide(view(obs("search_1", "search_service", Category.SEARCH_INDEX_ENTRY)), RULES)]
+    assert status_for(remaining, "COMPLETE") == DeletionStatus.INCOMPLETE  # evidence beats a COMPLETE claim
+    gone = [decide(view(obs("account_1", "account_service", Category.USER_PROFILE, exists=False)), RULES)]
+    assert status_for(gone, "NOT_STARTED") == DeletionStatus.COMPLETE  # ...and a NOT_STARTED claim
+
+
 # ---- intent fallback -----------------------------------------------------------------------
 def test_intent_rules_treat_explicit_refusals_as_non_deletion():
     assert not classify_intent("Please stop the promotional emails. I am not asking for deletion.").is_deletion

@@ -1,7 +1,9 @@
 # Evaluation report
 
 Status: the submitted `output.csv` comes from the full 518-case run with DeepSeek model review
-(`deepseek-flash`, 2026-10-24, run record `20261024T152551Z`). On the 32 samples the code-only and
+(`deepseek-flash`, 2026-10-24). The live run `20261024T152551Z` made the answers. After the
+case_63 rule, run `20261024T163504Z` regenerated the file from the response cache with 0 billed
+calls. On the 32 samples the code-only and
 model paths score identically; on the 518 eval requests the model changed one case (section
 "Final full run"). Tokens and cost are in `usage_report.md`.
 
@@ -12,7 +14,7 @@ python3 code/main.py                            # full run (518 requests) -> out
 python3 code/evaluation/usage_summary.py --write  # usage_report.md from the latest full-run record
 python3 code/evaluation/main.py                 # samples + custom cases, saves .cache/eval/<run>.json
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # single-flag ablation
-python3 -m pytest -q code/tests                 # 17 unit tests
+python3 -m pytest -q code/tests                 # 18 unit tests
 ```
 
 ## Metrics
@@ -94,13 +96,14 @@ Validation of `output.csv`:
 | Contract (`validate_file`: header, 518 rows, order, 7-key steps, phase order, operation/state pairs, where evidence may be cited) | 0 violations |
 | Every cited `evidence_id` exists (manifest, activity or audit log) and is dated at or before its case's `audit_at` | 1,073 citations, 0 problems |
 | Row order equals `deletion_requests.csv` | yes |
-| Deletion cases with no steps | 1 (case_63, still open) |
+| Deletion cases with no steps | 1 (case_63: INCOMPLETE, nothing established) |
 
-Before -> after on the eval set (no labels, so this compares the two paths):
+Before -> after on the eval set (no labels, so this compares the two paths; both include the
+case_63 rule below):
 
 | | Code only | Code + model review |
 |---|---|---|
-| COMPLETE / INCOMPLETE / NOT_APPLICABLE | 154 / 354 / 10 | 154 / 354 / 10 |
+| COMPLETE / INCOMPLETE / NOT_APPLICABLE | 153 / 355 / 10 | 153 / 355 / 10 |
 | Steps in `output.csv` | 2,852 | 2,855 |
 | Cases whose output differs | | 1 of 518 (case_34) |
 
@@ -125,9 +128,17 @@ What the model judged across all 518 cases (replayed from the cache, no new call
 - Ownership: 1,232 records "yes", 183 "uncertain", 0 "no", so no record was dropped.
 - Category: 1 refinement (case_34 above).
 
-Still open: case_63 is COMPLETE with no steps. Its only candidate record, `marketing_001`, is
-claimed for this subject by the data catalog, but the screen shows a different person, so the
-claim is rejected.
+case_63 (decided 2026-10-24):
+- Its only candidate record, `marketing_001`, is claimed for the subject by the data catalog, but
+  the screen shows a different person, so the claim stays rejected.
+- With no record established, `follow_claim_when_nothing_established` lets the workflow's own
+  NOT_STARTED claim decide. The case is now INCOMPLETE with no steps; before, it was COMPLETE
+  with no steps.
+- Regenerating `output.csv` from the response cache changed only this case: 529 answers
+  replayed, 0 billed calls, run record `20261024T163504Z`.
+
+Expected effect on the hidden score, modeled over three possible true answers: +0.135 points of
+status accuracy, and no change to step metrics or sequence accuracy.
 
 ## Iteration log (samples)
 
@@ -139,6 +150,7 @@ claim is rejected.
 | tight-batch-window | batch window 3h -> [-80, +10] min | unchanged | | | | | kept: on the 518 eval requests, cases without an account step 214 -> 172 |
 | screenshot-catalog-rule | catalog claim accepted when the screen shows the person or nobody | unchanged | | | | | kept: fixes eval case_55/case_61 empty rows |
 | fix-pipe-log-layout | pipe-delimited logs were never grouped into traces (found by a unit test) | unchanged | | | | | kept: 10 eval cases gain missed records |
+| claim-fallback | no record established for the subject -> the workflow's claim decides (COMPLETE stands, otherwise INCOMPLETE) | unchanged | | | | | kept: eval case_63 COMPLETE -> INCOMPLETE. The generic "no evidence-backed step -> INCOMPLETE" rule was rejected: it flips sample case_04 (status 1.000 -> 0.969) |
 
 ## Ablations (one flag off, samples)
 
@@ -149,6 +161,7 @@ claim is rejected.
 | `recover_accounts_from_activity` | 0.903 | 0.312 | batch recovery is the largest single gain |
 | `state_window_starts_at_request` | 0.928 | 0.469 | precision drops to 0.961: pre-request evidence shows pre-deletion state |
 | `verify_compliant_records_when_incomplete` | 0.945 | 0.562 | no sample exercises it; custom_03 F1 0.968 -> 0.857 |
+| `follow_claim_when_nothing_established` | 0.945 | 0.562 | no sample exercises it (case_04's claim is COMPLETE either way); on the eval set it changes only case_63 |
 
 ## Custom evaluation cases
 
@@ -185,3 +198,8 @@ Defined in `code/evaluation/custom_cases.py` (real users and evidence, one input
    run record of every answer used (live, cached, failed) and `usage_summary.py` joins it with the
    billed-call log by input hash, counting the original call behind each cached answer (2 unit
    tests).
+9. case_63 was COMPLETE with no steps: nothing about the subject is established, yet the output
+   claimed completion against a workflow that reported NOT_STARTED -> with no record established,
+   the workflow's claim decides (flag `follow_claim_when_nothing_established`, unit test). A
+   stricter "no proof -> INCOMPLETE" rule was measured and rejected because it breaks sample
+   case_04.

@@ -118,7 +118,10 @@ class AuditPipeline:
             return CaseResult(request.case_id, DeletionStatus.NOT_APPLICABLE, (), notes), ctx
         if ctx.subject is None:
             return CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), notes + ("subject not resolved",)), ctx
-        status = status_for(ctx.decisions)
+        claim = request.reported_status if self.policy.follow_claim_when_nothing_established else None
+        status = status_for(ctx.decisions, claim)
+        if claim is not None and not ctx.decisions:
+            notes += ("no record established: status follows the workflow's claim",)
         steps = build_steps(ctx.decisions, status,
                             verify_compliant=self.policy.verify_compliant_records_when_incomplete)
         return CaseResult(request.case_id, status, tuple(steps), notes), ctx
