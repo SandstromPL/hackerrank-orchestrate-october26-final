@@ -79,6 +79,15 @@ class Usage:
 
 
 @dataclass(frozen=True)
+class CallRecord:
+    """One answer the pipeline asked for, and where it came from."""
+
+    purpose: str
+    cache_key: str  # first 24 hex chars of the input hash, as in the cache file name and usage.jsonl
+    source: str  # "live" (answered now), "cache" (replayed from disk), "failed" (no usable answer)
+
+
+@dataclass(frozen=True)
 class Reply:
     text: str
     usage: Usage
@@ -178,6 +187,7 @@ class LLMClient:
         self._cache_dir = cache_dir / "llm"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self.usage_log = self._cache_dir / "usage.jsonl"
+        self.calls: list[CallRecord] = []
 
     @property
     def model(self) -> str:
@@ -216,7 +226,8 @@ class LLMClient:
 
     def _log_usage(self, reply: Reply, key: str, seconds: float, attempt: int) -> None:
         record = {**asdict(reply.usage), "cost_usd": round(reply.usage.cost_usd, 6), "cache_key": key[:24],
-                  "complete": reply.complete, "attempt": attempt, "seconds": round(seconds, 2)}
+                  "complete": reply.complete, "attempt": attempt, "seconds": round(seconds, 2),
+                  "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         with self.usage_log.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
 
@@ -226,6 +237,7 @@ class LLMClient:
         key = self._key(purpose, version, system, content, schema)
         cached = self._cache_dir / f"{purpose}-{key[:24]}.json"
         if cached.exists():
+            self.calls.append(CallRecord(purpose, key[:24], "cache"))
             return json.loads(cached.read_text(encoding="utf-8"))["output"]
         attempt_content = list(content)
         for attempt in (1, 2):
@@ -234,6 +246,7 @@ class LLMClient:
                 reply = self.backend.call(purpose, system, attempt_content, schema)
             except ProviderError as exc:
                 log.warning("%s call failed: %s", purpose, exc)
+                self.calls.append(CallRecord(purpose, key[:24], "failed"))
                 return None
             self._log_usage(reply, key, time.monotonic() - started, attempt)
             problem = None if reply.complete else "the reply was cut off"
@@ -250,8 +263,23 @@ class LLMClient:
             if problem is None and output is not None:
                 cached.write_text(json.dumps({"purpose": purpose, "model": self.backend.model, "output": output},
                                              ensure_ascii=False, indent=1), encoding="utf-8")
+                self.calls.append(CallRecord(purpose, key[:24], "live"))
                 return output
             log.warning("%s attempt %d unusable: %s", purpose, attempt, problem)
             attempt_content = list(content) + [{"type": "text", "text": f"Your previous reply was unusable: {problem}. "
                                                 "Return only the json object required by the schema."}]
+        self.calls.append(CallRecord(purpose, key[:24], "failed"))
         return None
+
+    def call_counts(self) -> dict[str, int]:
+        counts = {"live": 0, "cache": 0, "failed": 0}
+        for call in self.calls:
+            counts[call.source] += 1
+        return counts
+
+    def save_run(self, path: Path, **meta: object) -> None:
+        """Write the run record that usage_summary.py joins with usage.jsonl for usage_report.md."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {"provider": self.backend.provider, "model": self.backend.model, **meta,
+                  "calls": [asdict(call) for call in self.calls]}
+        path.write_text(json.dumps(record, indent=1), encoding="utf-8")

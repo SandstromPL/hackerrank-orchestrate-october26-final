@@ -125,3 +125,49 @@ repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T20:25:53+05:30] Wire DeepSeek backend and prepare the .env key slot
+
+User Prompt (verbatim, secrets redacted):
+yeah i have deepseek api key. ready the key value space and tell me where to add
+
+Agent Response Summary:
+Checked DeepSeek's official docs (OpenAI-compatible base URL https://api.deepseek.com, model deepseek-flash, JSON mode needs response_format json_object plus the word json and an example in the prompt, occasional empty replies). Rewrote llm_client.py as one complete_json() interface over DeepSeek and Anthropic backends, with a corrective retry when a reply is not valid JSON or fails the caller's pydantic schema, the same disk cache, and usage logging with DeepSeek peak/off-peak pricing. Created a git-ignored .env (mode 600) with an empty DEEPSEEK_API_KEY= slot for the user to fill in themselves, updated .env.example and added pinned code/requirements.txt. 14 unit tests pass; with the empty key the eval stays deterministic and unchanged (F1 0.945). No key value was requested in chat or logged.
+
+Actions:
+* WebFetch: api-docs.deepseek.com/guides/json_mode, api-docs.deepseek.com
+* Installed openai 3.37.0 in .venv
+* Edited code/deletion_audit/llm_client.py, adjudication.py, screenshot_reader.py; added code/tests/test_llm_client.py, code/requirements.txt
+* Created .env (git-ignored, chmod 600) with DEEPSEEK_API_KEY placeholder; updated .env.example
+* Ran pytest (14 passed) and code/evaluation/main.py; commit b29268c
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T20:45:34+05:30] First DeepSeek run: key check, sample eval, vision fixes, cost
+
+User Prompt (verbatim, secrets redacted):
+I pasted my DeepSeek key into .env and saved it. Check that it's set (without printing it), run the eval on the 32 samples with DeepSeek, and report the before/after delta and cost.
+
+Agent Response Summary:
+Confirmed DEEPSEEK_API_KEY is set without printing it (35 chars, sk- prefix, no stray characters, .env git-ignored and mode 600), then smoke-tested one text and one screenshot call before the full eval. The DeepSeek eval left the 32 samples unchanged (status 1.000, step F1 0.945, sequence 0.562; the model changed 0 outputs) and raised custom-case status from 0.750 to 1.000 (the Spanish negation case is now NOT_APPLICABLE; the injection in custom_02 was flagged and ignored). Inspecting the cached screenshot transcripts exposed vision issues (a one-letter email misread, display labels returned as record IDs, list rows linking wholesale, restore state left null); fixed them with catalog-anchored linking (new Observation.linkable), fuzzy corroboration, alias mapping, an OCR backstop and a v3 screenshot prompt, after a v2 prompt caused two regressions that were caught and reverted in v3. Across the 12 screenshot/PDF eval cases the model path now matches code-only on 11 and adds the customer's still-linked support attachment on case_34. Total spend today: 94 calls, $0.076 (eval run alone 46 calls, $0.030); a full 518-case run projects to ~$0.26 off-peak and ~35 minutes sequentially.
+
+Actions:
+* Masked key check of .env; smoke test (scratchpad smoke_deepseek.py)
+* Ran code/evaluation/main.py with DeepSeek (labels deepseek-v1, deepseek-v2-vision-rows, deepseek-v3-screenshot-ids)
+* Replayed cached answers (scratchpad model_effect.py) and compared 12 screenshot/PDF eval cases model vs code-only
+* Edited evidence/screenshots.py, evidence/store.py, domain.py, prompts/screenshot.md, screenshot_reader.py; added a unit test (15 passing)
+* Updated code/evaluation/evaluation_report.md; commit 502e192
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

@@ -69,3 +69,14 @@ def test_deepseek_peak_hours_and_offpeak_price():
     peak = Usage("deepseek", "deepseek-flash", "t", 1_000_000, 0, 0, 0, peak=True)
     off = Usage("deepseek", "deepseek-flash", "t", 1_000_000, 0, 0, 0, peak=False)
     assert round(peak.cost_usd, 4) == 0.30 and round(off.cost_usd, 4) == 0.15
+
+
+def test_call_records_track_where_answers_came_from(tmp_path):
+    client = LLMClient(FakeBackend([json.dumps({"answer": 1}), "not json", "still not json"]), tmp_path)
+    ask = dict(purpose="t", version="v1", system="s", schema={}, validate=validate)
+    client.complete_json(content=[{"type": "text", "text": "a"}], **ask)  # answered live
+    client.complete_json(content=[{"type": "text", "text": "a"}], **ask)  # replayed from the cache
+    client.complete_json(content=[{"type": "text", "text": "b"}], **ask)  # unusable twice
+    assert [call.source for call in client.calls] == ["live", "cache", "failed"]
+    assert client.call_counts() == {"live": 1, "cache": 1, "failed": 1}
+    assert client.calls[0].cache_key == client.calls[1].cache_key

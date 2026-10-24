@@ -9,6 +9,7 @@ conservative fallback row.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from .screenshot_reader import read_screenshots
 from .steps import build_steps, status_for
 
 log = logging.getLogger(__name__)
+PROGRESS_EVERY = 50
 
 
 @dataclass
@@ -123,11 +125,16 @@ class AuditPipeline:
 
     def run(self, requests: list[DeletionRequest]) -> list[CaseResult]:
         results = []
-        for request in sorted(requests, key=lambda r: case_sort_key(r.case_id)):
+        ordered = sorted(requests, key=lambda r: case_sort_key(r.case_id))
+        started = time.monotonic()
+        for done, request in enumerate(ordered, start=1):
             try:
                 result, _ = self.audit(request)
             except Exception as exc:  # noqa: BLE001 - isolation boundary: emit a fallback row and continue
                 log.exception("case %s failed", request.case_id)
                 result = CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), (f"error: {exc}",))
             results.append(result)
+            if done % PROGRESS_EVERY == 0 or done == len(ordered):
+                log.info("audited %d/%d cases in %.0fs; model answers %s", done, len(ordered),
+                         time.monotonic() - started, self.client.call_counts() if self.client else "off")
         return results

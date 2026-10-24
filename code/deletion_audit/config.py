@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATASET_DIR = REPO_ROOT / "dataset"
 OUTPUT_CSV = REPO_ROOT / "output.csv"
 CACHE_DIR = REPO_ROOT / ".cache"
+RUNS_DIR = CACHE_DIR / "llm" / "runs"  # one record per main.py run: the model answers it used
 
 
 @dataclass(frozen=True)
