@@ -13,6 +13,7 @@ from .steps import serialize
 HEADER = ["case_id", "deletion_status", "steps_json"]
 REVIEW_HEADER = ["case_id", "deletion_status", "priority", "reason", "detail"]
 REVIEW_ORDER = {reason: rank for rank, reason in enumerate(ReviewReason)}  # declaration order: most severe first
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 
 
 def write_output(results: list[CaseResult], path: Path) -> None:
@@ -24,6 +25,13 @@ def write_output(results: list[CaseResult], path: Path) -> None:
             writer.writerow([result.case_id, result.status.value, serialize(list(result.steps))])
 
 
+def spreadsheet_safe(value: object) -> str:
+    """People open the review queue in spreadsheets, and IDs come from untrusted evidence, so a cell
+    that would start a formula is escaped with a leading apostrophe."""
+    text = str(value)
+    return "'" + text if text.startswith(FORMULA_START) else text
+
+
 def write_review_queue(results: list[CaseResult], path: Path) -> int:
     """One row per (case, reason) a person should check; returns the number of rows written."""
     rows = sorted(((r.case_id, r.status.value, item.reason.priority, item.reason.value, item.detail)
@@ -32,7 +40,7 @@ def write_review_queue(results: list[CaseResult], path: Path) -> int:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(REVIEW_HEADER)
-        writer.writerows(rows)
+        writer.writerows([spreadsheet_safe(cell) for cell in row] for row in rows)
     return len(rows)
 
 

@@ -192,13 +192,15 @@ def test_review_queue_lists_each_case_reason_once_in_priority_order(tmp_path):
                                                                 item("OWNERSHIP_DOUBTED", "marketing_1"),
                                                                 item("OWNERSHIP_DOUBTED", "marketing_1"))),
         CaseResult("case_3", DeletionStatus.COMPLETE),  # nothing to check: no row
+        CaseResult("case_4", DeletionStatus.COMPLETE, (), (), (item("RECORD_DROPPED", "=HYPERLINK(\"x\")"),)),
     ]
     path = tmp_path / "review_queue.csv"
-    assert write_review_queue(results, path) == 4
+    assert write_review_queue(results, path) == 5
     assert path.read_text(encoding="utf-8").splitlines() == [
         "case_id,deletion_status,priority,reason,detail",
         "case_2,INCOMPLETE,1,STATUS_FROM_CLAIM,reported_status NOT_STARTED",  # the status itself rests on a claim
         "case_2,INCOMPLETE,2,OWNERSHIP_DOUBTED,marketing_1",
+        'case_4,COMPLETE,2,RECORD_DROPPED,"\'=HYPERLINK(""x"")"',  # an evidence ID never runs as a formula
         'case_10,COMPLETE,2,AMBIGUOUS_ACCOUNT,"one of: account_1, account_2"',
         "case_10,COMPLETE,3,AMBIGUOUS_ANALYTICS,possibly one of: a_2",
     ]
