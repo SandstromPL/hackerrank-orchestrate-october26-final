@@ -193,3 +193,25 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T16:17:36+00:00] Rewrite README to describe the actual pipeline
+
+User Prompt (verbatim, secrets redacted):
+Rewrite the root README.md so it describes the actual pipeline: setup with the venv and requirements, env vars, run commands, architecture, design decisions, the eval and usage reports, and known limitations.
+
+Agent Response Summary:
+I replaced the organizer's starter README with a description of our solution. It covers headline results, venv setup (the system python3 lacks pydantic), optional Tesseract, a table of the seven env vars, run commands, inputs and outputs, the architecture stage by stage with module names, and the model's two jobs with their merge guardrails. It also covers design decisions, the eval and usage reports, known limitations, the repository layout and the organizer's code.zip command, kept verbatim. The limitation numbers were recomputed from output.csv by a code-only replay with no model calls: 172 of 508 deletion cases have no account step, 170 accounts come from batch recovery, case_63 is COMPLETE with no steps, recall has a ceiling, and the response cache is not in code.zip. I fact-checked the draft against the code and made 14 corrections. Examples: activity rows have four uses, not three; batch-recovered accounts are an exception to the absence rule; .env.example is not in code.zip, so setup now shows the .env contents inline; and the misleading diagram was replaced with a stage list.
+
+Actions:
+* README.md rewritten (344 lines)
+* Fact-check: read llm_client.py, linking.py, policy.py, steps.py, identity.py, evidence/store.py and the tests; recomputed the counts from output.csv with a code-only replay
+* Ran every README command from /tmp; a --no-llm run from /tmp is byte-identical to the code-only baseline; pytest: 17 passed
+* Committed README.md and log.txt
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
