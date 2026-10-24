@@ -13,13 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from deletion_audit.activity import WorkflowBatches  # noqa: E402
 from deletion_audit.adjudication import AdjudicationOut, CaseAdjudicator  # noqa: E402
 from deletion_audit.dataset import Rule  # noqa: E402
-from deletion_audit.domain import (ActivityEvent, Category, DeletionRequest, DeletionStatus, Observation,  # noqa: E402
-                                   Operation, RequiredAction, Subject)
+from deletion_audit.domain import (ActivityEvent, CaseResult, Category, DeletionRequest, DeletionStatus,  # noqa: E402
+                                   Observation, Operation, RequiredAction, ReviewItem, ReviewReason, Subject)
 from deletion_audit.evidence.log_traces import parse_line  # noqa: E402
 from deletion_audit.evidence.store import available  # noqa: E402
 from deletion_audit.intent import classify_intent  # noqa: E402
 from deletion_audit.linking import BatchRecovery, ResourceView, most_specific_category  # noqa: E402
-from deletion_audit.output import validate_row  # noqa: E402
+from deletion_audit.output import validate_row, write_review_queue  # noqa: E402
 from deletion_audit.policy import decide  # noqa: E402
 from deletion_audit.steps import build_steps, serialize, status_for  # noqa: E402
 
@@ -181,6 +181,27 @@ def test_category_comes_from_the_most_specific_observation():
     exposed = view(obs("support_7", "support_platform", Category.SUPPORT_MESSAGE, direct_identifiers=frozenset({"a@b.com"})))
     assert decide(exposed, RULES).remediation == Operation.REDACT_RECORD  # read as a message
     assert decide(replace(exposed, category=Category.SUPPORT_ATTACHMENT), RULES).remediation == Operation.DELETE_RECORD
+
+
+def test_review_queue_lists_each_case_reason_once_in_priority_order(tmp_path):
+    item = lambda reason, detail="": ReviewItem(ReviewReason[reason], detail)
+    results = [
+        CaseResult("case_10", DeletionStatus.COMPLETE, (), (), (item("AMBIGUOUS_ANALYTICS", "possibly one of: a_2"),
+                                                               item("AMBIGUOUS_ACCOUNT", "one of: account_1, account_2"))),
+        CaseResult("case_2", DeletionStatus.INCOMPLETE, (), (), (item("STATUS_FROM_CLAIM", "reported_status NOT_STARTED"),
+                                                                item("OWNERSHIP_DOUBTED", "marketing_1"),
+                                                                item("OWNERSHIP_DOUBTED", "marketing_1"))),
+        CaseResult("case_3", DeletionStatus.COMPLETE),  # nothing to check: no row
+    ]
+    path = tmp_path / "review_queue.csv"
+    assert write_review_queue(results, path) == 4
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "case_id,deletion_status,priority,reason,detail",
+        "case_2,INCOMPLETE,1,STATUS_FROM_CLAIM,reported_status NOT_STARTED",  # the status itself rests on a claim
+        "case_2,INCOMPLETE,2,OWNERSHIP_DOUBTED,marketing_1",
+        'case_10,COMPLETE,2,AMBIGUOUS_ACCOUNT,"one of: account_1, account_2"',
+        "case_10,COMPLETE,3,AMBIGUOUS_ANALYTICS,possibly one of: a_2",
+    ]
 
 
 # ---- intent fallback -----------------------------------------------------------------------

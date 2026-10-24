@@ -237,9 +237,46 @@ class Step:
         return (PHASE_ORDER[self.phase], OPERATION_ORDER[self.operation], self.system_id, self.resource_id)
 
 
+class ReviewReason(str, Enum):
+    """Why a case is also listed in review_queue.csv: a call the evidence could not settle safely.
+
+    Declared most severe first; `priority` groups them for triage.
+    """
+
+    CASE_ERROR = "CASE_ERROR"  # the case raised: a conservative fallback row was written
+    SUBJECT_NOT_RESOLVED = "SUBJECT_NOT_RESOLVED"  # the request email matches no known identity
+    MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"  # no usable model answer: the deterministic result stands
+    INTENT_DISAGREEMENT = "INTENT_DISAGREEMENT"  # the rules and the model read the request differently
+    INJECTION_IGNORED = "INJECTION_IGNORED"  # untrusted text tried to instruct the agent
+    STATUS_FROM_CLAIM = "STATUS_FROM_CLAIM"  # no record established: the workflow's own claim decided
+    RECORD_DROPPED = "RECORD_DROPPED"  # a soft link dropped because the record names someone else
+    OWNERSHIP_DOUBTED = "OWNERSHIP_DOUBTED"  # the model doubts a soft link that no identifier refutes (kept)
+    AMBIGUOUS_ACCOUNT = "AMBIGUOUS_ACCOUNT"  # the account is one of several batch rows nothing tells apart
+    ACCOUNT_NOT_FOUND = "ACCOUNT_NOT_FOUND"  # no evidence and no batch row names the subject's account
+    AMBIGUOUS_ANALYTICS = "AMBIGUOUS_ANALYTICS"  # an anonymized analytics profile in the batch may be the subject's
+
+    @property
+    def priority(self) -> int:
+        """1: the status may be wrong; 2: a record may be missing or wrongly kept; 3: only a check of an
+        already-compliant record may be missing."""
+        if self in (ReviewReason.AMBIGUOUS_ANALYTICS,):
+            return 3
+        if self in (ReviewReason.RECORD_DROPPED, ReviewReason.OWNERSHIP_DOUBTED, ReviewReason.AMBIGUOUS_ACCOUNT,
+                    ReviewReason.ACCOUNT_NOT_FOUND):
+            return 2
+        return 1
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    reason: ReviewReason
+    detail: str = ""
+
+
 @dataclass(frozen=True)
 class CaseResult:
     case_id: str
     status: DeletionStatus
     steps: tuple[Step, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)
+    review: tuple[ReviewItem, ...] = ()  # for review_queue.csv; never changes the output row

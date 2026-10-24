@@ -5,6 +5,10 @@ under a hash of (provider, model, prompt version, schema, payload), so a re-run 
 inputs replays the same answers at zero cost. A reply that is not valid JSON or fails the
 caller's schema check is retried once with the error attached; any other failure returns None
 and the caller falls back to the deterministic pipeline.
+
+`complete_many` runs independent calls on a thread pool (`LLM_MAX_CONCURRENCY` in flight, call
+starts spaced to `LLM_CALLS_PER_SECOND`); the SDKs back off and retry on 429s. Answers are also
+memoized for the run, so asking again for the same input never calls (or bills) twice.
 """
 
 from __future__ import annotations
@@ -13,12 +17,14 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from .config import REPO_ROOT
 
@@ -34,6 +40,8 @@ PRICING: dict[str, dict[str, float]] = {
 }
 JSON_INSTRUCTION = ("\n\nRespond with a single json object (no prose, no code fences) that validates against "
                     "this JSON Schema:\n")
+DEFAULT_MAX_CONCURRENCY = 8
+DEFAULT_CALLS_PER_SECOND = 4.0
 
 
 class ProviderError(RuntimeError):
@@ -50,6 +58,33 @@ def load_env_file(path: Path = REPO_ROOT / ".env") -> None:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def env_number(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        log.warning("%s is not a number: using %s", name, default)
+        return default
+
+
+class RateLimiter:
+    """Spaces call starts at least 1/rate seconds apart across threads (rate <= 0: no limit)."""
+
+    def __init__(self, calls_per_second: float) -> None:
+        self._interval = 1.0 / calls_per_second if calls_per_second > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next_start = 0.0
+
+    def wait(self) -> None:
+        if not self._interval:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_start)
+            self._next_start = start + self._interval
+        if start > now:
+            time.sleep(start - now)
 
 
 def deepseek_peak(at: datetime) -> bool:
@@ -182,12 +217,19 @@ class AnthropicBackend:
 
 
 class LLMClient:
-    def __init__(self, backend: Backend, cache_dir: Path) -> None:
+    def __init__(self, backend: Backend, cache_dir: Path, *, max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
+                 calls_per_second: float = DEFAULT_CALLS_PER_SECOND) -> None:
         self.backend = backend
         self._cache_dir = cache_dir / "llm"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self.usage_log = self._cache_dir / "usage.jsonl"
         self.calls: list[CallRecord] = []
+        self.max_concurrency = max(1, max_concurrency)
+        self.calls_per_second = calls_per_second
+        self._limiter = RateLimiter(calls_per_second)
+        self._answers: dict[str, dict | None] = {}  # input hash -> answer already obtained this run
+        self._lock = threading.Lock()  # guards calls, the key locks and the usage log
+        self._key_locks: dict[str, threading.Lock] = {}
 
     @property
     def model(self) -> str:
@@ -215,8 +257,12 @@ class LLMClient:
         except ImportError as exc:
             log.warning("model SDK missing (%s): running the deterministic pipeline only", exc)
             return None
-        log.info("model review enabled: %s / %s", backend.provider, backend.model)
-        return cls(backend, cache_dir)
+        client = cls(backend, cache_dir,
+                     max_concurrency=int(env_number("LLM_MAX_CONCURRENCY", DEFAULT_MAX_CONCURRENCY)),
+                     calls_per_second=env_number("LLM_CALLS_PER_SECOND", DEFAULT_CALLS_PER_SECOND))
+        log.info("model review enabled: %s / %s (up to %d calls in flight, %.1f starts/s)", backend.provider,
+                 backend.model, client.max_concurrency, client.calls_per_second)
+        return client
 
     def _key(self, purpose: str, version: str, system: str, content: object, schema: dict) -> str:
         blob = json.dumps({"provider": self.backend.provider, "model": self.backend.model, "purpose": purpose,
@@ -228,25 +274,62 @@ class LLMClient:
         record = {**asdict(reply.usage), "cost_usd": round(reply.usage.cost_usd, 6), "cache_key": key[:24],
                   "complete": reply.complete, "attempt": attempt, "seconds": round(seconds, 2),
                   "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-        with self.usage_log.open("a", encoding="utf-8") as handle:
+        with self._lock, self.usage_log.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
+
+    def _record(self, purpose: str, key: str, source: str) -> None:
+        with self._lock:
+            self.calls.append(CallRecord(purpose, key[:24], source))
+
+    def _key_lock(self, key: str) -> threading.Lock:
+        with self._lock:
+            return self._key_locks.setdefault(key, threading.Lock())
 
     def complete_json(self, *, purpose: str, version: str, system: str, content: list[dict], schema: dict,
                       validate: Callable[[dict], object] | None = None) -> dict | None:
-        """One structured call (plus one corrective retry). Returns the parsed JSON or None."""
+        """One structured call (plus one corrective retry). Returns the parsed JSON or None.
+
+        Thread-safe. The same input asked twice in one run (e.g. by the parallel prefetch and then
+        the per-case pass) is answered once; a concurrent duplicate waits for the first.
+        """
         key = self._key(purpose, version, system, content, schema)
+        with self._key_lock(key):
+            if key not in self._answers:
+                self._answers[key] = self._answer(purpose, key, system, content, schema, validate)
+            return self._answers[key]
+
+    def complete_many(self, jobs: list[dict[str, Any]]) -> list[dict | None]:
+        """complete_json(**job) for every job, up to max_concurrency at once; results keep the jobs' order.
+
+        A job that raises yields None here; the caller's own per-case handling meets the error again.
+        """
+        def run(job: dict[str, Any]) -> dict | None:
+            try:
+                return self.complete_json(**job)
+            except Exception:  # noqa: BLE001 - one bad job must not sink the batch
+                log.exception("%s call raised", job.get("purpose"))
+                return None
+
+        if self.max_concurrency == 1 or len(jobs) < 2:
+            return [run(job) for job in jobs]
+        with ThreadPoolExecutor(max_workers=self.max_concurrency, thread_name_prefix="llm") as pool:
+            return list(pool.map(run, jobs))
+
+    def _answer(self, purpose: str, key: str, system: str, content: list[dict], schema: dict,
+                validate: Callable[[dict], object] | None) -> dict | None:
         cached = self._cache_dir / f"{purpose}-{key[:24]}.json"
         if cached.exists():
-            self.calls.append(CallRecord(purpose, key[:24], "cache"))
+            self._record(purpose, key, "cache")
             return json.loads(cached.read_text(encoding="utf-8"))["output"]
         attempt_content = list(content)
         for attempt in (1, 2):
+            self._limiter.wait()
             started = time.monotonic()
             try:
                 reply = self.backend.call(purpose, system, attempt_content, schema)
             except ProviderError as exc:
                 log.warning("%s call failed: %s", purpose, exc)
-                self.calls.append(CallRecord(purpose, key[:24], "failed"))
+                self._record(purpose, key, "failed")
                 return None
             self._log_usage(reply, key, time.monotonic() - started, attempt)
             problem = None if reply.complete else "the reply was cut off"
@@ -261,25 +344,32 @@ class LLMClient:
                 except ValueError as exc:  # json.JSONDecodeError and pydantic.ValidationError are ValueErrors
                     problem = f"the reply did not match the schema: {str(exc)[:500]}"
             if problem is None and output is not None:
-                cached.write_text(json.dumps({"purpose": purpose, "model": self.backend.model, "output": output},
-                                             ensure_ascii=False, indent=1), encoding="utf-8")
-                self.calls.append(CallRecord(purpose, key[:24], "live"))
+                # Write-then-rename, so a crash or a concurrent reader never sees half a cache file.
+                partial = cached.with_name(f"{cached.name}.{threading.get_ident()}.tmp")
+                partial.write_text(json.dumps({"purpose": purpose, "model": self.backend.model, "output": output},
+                                              ensure_ascii=False, indent=1), encoding="utf-8")
+                os.replace(partial, cached)
+                self._record(purpose, key, "live")
                 return output
             log.warning("%s attempt %d unusable: %s", purpose, attempt, problem)
             attempt_content = list(content) + [{"type": "text", "text": f"Your previous reply was unusable: {problem}. "
                                                 "Return only the json object required by the schema."}]
-        self.calls.append(CallRecord(purpose, key[:24], "failed"))
+        self._record(purpose, key, "failed")
         return None
 
     def call_counts(self) -> dict[str, int]:
         counts = {"live": 0, "cache": 0, "failed": 0}
-        for call in self.calls:
-            counts[call.source] += 1
+        with self._lock:
+            for call in self.calls:
+                counts[call.source] += 1
         return counts
 
     def save_run(self, path: Path, **meta: object) -> None:
         """Write the run record that usage_summary.py joins with usage.jsonl for usage_report.md."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        record = {"provider": self.backend.provider, "model": self.backend.model, **meta,
-                  "calls": [asdict(call) for call in self.calls]}
+        with self._lock:  # sorted: parallel calls finish in any order
+            calls = [asdict(call) for call in sorted(self.calls, key=lambda c: (c.purpose, c.cache_key, c.source))]
+        record = {"provider": self.backend.provider, "model": self.backend.model,
+                  "max_concurrency": self.max_concurrency, "calls_per_second": self.calls_per_second, **meta,
+                  "calls": calls}
         path.write_text(json.dumps(record, indent=1), encoding="utf-8")

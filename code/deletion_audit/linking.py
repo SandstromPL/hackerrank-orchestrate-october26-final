@@ -15,7 +15,7 @@ from datetime import datetime
 
 from .activity import WorkflowBatches
 from .config import AuditPolicy
-from .domain import Category, DeletionRequest, Observation, Subject
+from .domain import Category, DeletionRequest, Observation, Subject, case_sort_key
 from .evidence.records import category_for, system_for
 from .evidence.snapshot import Coverage
 from .evidence.store import EvidenceStore, available
@@ -145,6 +145,11 @@ class CaseLinker:
 class Recovery:
     assigned: dict[str, str]  # case_id -> the one resource elimination left it
     unresolved: dict[str, frozenset[str]]  # claimant case_id -> its remaining candidates (empty: none in its batch)
+
+    def rivals(self, case_id: str) -> list[str]:
+        """Other unresolved claimants competing for any of this case's candidates."""
+        mine = self.unresolved.get(case_id, frozenset())
+        return sorted((c for c, opts in self.unresolved.items() if c != case_id and opts & mine), key=case_sort_key)
 
 
 class BatchRecovery:

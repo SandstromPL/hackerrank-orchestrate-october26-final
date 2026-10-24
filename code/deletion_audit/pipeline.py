@@ -2,8 +2,11 @@
 
 The deterministic pass always runs first and is the fallback. When a model is configured it
 reviews each case once (intent, ownership of soft links, categories) and code re-applies the
-policy to the reviewed view. One failing case never stops the run: it is logged and gets a
-conservative fallback row.
+policy to the reviewed view. The reviews are independent, so they are sent up front on a
+rate-limited thread pool; the per-case pass stays single-threaded and in case order. One failing
+case never stops the run: it is logged and gets a conservative fallback row. Calls the evidence
+could not settle safely (an ambiguous batch, a doubted link, a claim-based status) are recorded
+per case for review_queue.csv; they never change the output row.
 """
 
 from __future__ import annotations
@@ -17,7 +20,8 @@ from .activity import WorkflowBatches
 from .adjudication import CaseAdjudicator
 from .config import CACHE_DIR, DEFAULT_POLICY, AuditPolicy
 from .dataset import Dataset, load_requests
-from .domain import Category, CaseResult, DeletionRequest, DeletionStatus, RequiredAction, Subject, case_sort_key
+from .domain import (Category, CaseResult, DeletionRequest, DeletionStatus, RequiredAction, ReviewItem, ReviewReason,
+                     Subject, case_sort_key)
 from .evidence.store import EvidenceStore
 from .identity import IdentityIndex
 from .intent import IntentResult, classify_intent
@@ -41,6 +45,7 @@ class CaseContext:
     views: list[ResourceView] = field(default_factory=list)
     decisions: list[Decision] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    review: list[ReviewItem] = field(default_factory=list)
 
 
 class AuditPipeline:
@@ -79,6 +84,26 @@ class AuditPipeline:
             self._recoveries = {recovery.system_id: recovery.assign(pairs) for recovery in recoveries}
         return self._recoveries
 
+    def _assigned(self) -> dict[str, dict[str, str]]:
+        return {system_id: recovery.assigned for system_id, recovery in self._recovered().items()}
+
+    def _gaps(self, request: DeletionRequest, views: list[ResourceView]) -> list[ReviewItem]:
+        """Records the subject should have that batch recovery could not pin to this request."""
+        items = []
+        for system_id, recovery in sorted(self._recovered().items()):
+            candidates = recovery.unresolved.get(request.case_id)
+            if candidates is None or any(v.system_id == system_id for v in views):
+                continue  # not a claimant, or a record of this system is already in the case
+            listed = ", ".join(sorted(candidates))
+            rivals = recovery.rivals(request.case_id)  # resolving one of them settles the others too
+            shared = f"; also open for {', '.join(rivals)}" if rivals else ""
+            if system_id == "account_service":
+                items.append(ReviewItem(ReviewReason.AMBIGUOUS_ACCOUNT, f"one of: {listed}{shared}") if candidates else
+                             ReviewItem(ReviewReason.ACCOUNT_NOT_FOUND, "no evidence or workflow-batch row names it"))
+            elif candidates:  # most requests have no analytics profile, so an empty batch says nothing
+                items.append(ReviewItem(ReviewReason.AMBIGUOUS_ANALYTICS, f"possibly one of: {listed}{shared}"))
+        return items
+
     def _decide(self, views: list[ResourceView]) -> list[Decision]:
         return [d for d in (decide(v, self.dataset.rules) for v in views) if d is not None]
 
@@ -99,11 +124,11 @@ class AuditPipeline:
                 "phones_digits": sorted(subject.phones), "email_hashes": sorted(subject.email_hashes)}
 
     def context(self, request: DeletionRequest) -> CaseContext:
-        ctx = CaseContext(request=request, intent=classify_intent(request.request_text))
+        rules_intent = classify_intent(request.request_text)
+        ctx = CaseContext(request=request, intent=rules_intent)
         ctx.subject = self.identities.resolve(request.email)
         if ctx.subject is not None:
-            assigned = {system_id: recovery.assigned for system_id, recovery in self._recovered().items()}
-            ctx.views = self.linker.resources(request, ctx.subject, assigned)
+            ctx.views = self.linker.resources(request, ctx.subject, self._assigned())
             ctx.decisions = self._decide(ctx.views)
         if self.adjudicator is not None and ctx.subject is not None:
             review = self.adjudicator.review(request, self._subject_keys(ctx.subject), ctx.views,
@@ -112,37 +137,75 @@ class AuditPipeline:
                 ctx.intent, ctx.views = review.intent, review.views
                 ctx.decisions = self._decide(ctx.views)
                 ctx.notes.extend(review.notes)
+                ctx.review += [ReviewItem(ReviewReason.RECORD_DROPPED, rid) for rid in review.dropped]
+                ctx.review += [ReviewItem(ReviewReason.OWNERSHIP_DOUBTED, rid) for rid in review.doubted]
                 if review.injection_detected:
                     ctx.notes.append("instructions found in untrusted text were ignored")
+                    ctx.review.append(ReviewItem(ReviewReason.INJECTION_IGNORED))
+                model = review.model_intent
+                if model is not None and model.is_deletion != rules_intent.is_deletion:
+                    ctx.review.append(ReviewItem(ReviewReason.INTENT_DISAGREEMENT,
+                                                 f"rules: {rules_intent.request_type}, model: {model.request_type}, "
+                                                 f"kept: {ctx.intent.basis}"))
             else:
                 ctx.notes.append("model review unavailable: deterministic result kept")
+                ctx.review.append(ReviewItem(ReviewReason.MODEL_UNAVAILABLE))
         return ctx
 
     def audit(self, request: DeletionRequest) -> tuple[CaseResult, CaseContext]:
         ctx = self.context(request)
         notes = (ctx.intent.basis, *ctx.notes)
         if not ctx.intent.is_deletion:
-            return CaseResult(request.case_id, DeletionStatus.NOT_APPLICABLE, (), notes), ctx
+            return CaseResult(request.case_id, DeletionStatus.NOT_APPLICABLE, (), notes, tuple(ctx.review)), ctx
         if ctx.subject is None:
-            return CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), notes + ("subject not resolved",)), ctx
+            unresolved = ReviewItem(ReviewReason.SUBJECT_NOT_RESOLVED, "no current or historical identity has this email")
+            return CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), notes + ("subject not resolved",),
+                              (*ctx.review, unresolved)), ctx
         claim = request.reported_status if self.policy.follow_claim_when_nothing_established else None
         status = status_for(ctx.decisions, claim)
+        review = ctx.review + self._gaps(request, ctx.views)
         if claim is not None and not any(d.observed for d in ctx.decisions):
             notes += ("no record established: status follows the workflow's claim",)
+            review.append(ReviewItem(ReviewReason.STATUS_FROM_CLAIM, f"reported_status {claim}"))
         steps = build_steps(ctx.decisions, status,
                             verify_compliant=self.policy.verify_compliant_records_when_incomplete)
-        return CaseResult(request.case_id, status, tuple(steps), notes), ctx
+        return CaseResult(request.case_id, status, tuple(steps), notes, tuple(review)), ctx
+
+    def _prefetch_reviews(self, requests: list[DeletionRequest]) -> None:
+        """Send every case's model review up front, up to `max_concurrency` calls at a time.
+
+        Only the independent model calls run concurrently. This pass builds the same dossiers the
+        per-case pass will; that pass then reads each answer from the client's memo, in case order,
+        so every decision is still made single-threaded and the output does not depend on timing.
+        """
+        if self.adjudicator is None or self.client is None or self.client.max_concurrency == 1:
+            return
+        started, jobs = time.monotonic(), []
+        for request in requests:
+            try:
+                subject = self.identities.resolve(request.email)
+                if subject is not None:
+                    views = self.linker.resources(request, subject, self._assigned())
+                    jobs.append(self.adjudicator.job(request, self._subject_keys(subject), views,
+                                                     self._excerpts(views)))
+            except Exception:  # noqa: BLE001 - the per-case pass meets (and logs) this error again
+                continue
+        self.client.complete_many(jobs)
+        log.info("prefetched %d model reviews in %.0fs (up to %d in flight); model answers %s", len(jobs),
+                 time.monotonic() - started, self.client.max_concurrency, self.client.call_counts())
 
     def run(self, requests: list[DeletionRequest]) -> list[CaseResult]:
         results = []
         ordered = sorted(requests, key=lambda r: case_sort_key(r.case_id))
+        self._prefetch_reviews(ordered)
         started = time.monotonic()
         for done, request in enumerate(ordered, start=1):
             try:
                 result, _ = self.audit(request)
             except Exception as exc:  # noqa: BLE001 - isolation boundary: emit a fallback row and continue
                 log.exception("case %s failed", request.case_id)
-                result = CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), (f"error: {exc}",))
+                result = CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), (f"error: {exc}",),
+                                    (ReviewItem(ReviewReason.CASE_ERROR, type(exc).__name__),))
             results.append(result)
             if done % PROGRESS_EVERY == 0 or done == len(ordered):
                 log.info("audited %d/%d cases in %.0fs; model answers %s", done, len(ordered),

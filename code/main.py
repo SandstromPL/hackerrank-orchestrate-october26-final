@@ -1,8 +1,10 @@
 """Entry point: audit every deletion request and write output.csv at the repository root.
 
-    python3 code/main.py                       # full run (518 requests) -> output.csv
+    python3 code/main.py                       # full run (518 requests) -> output.csv + review_queue.csv
     python3 code/main.py --no-llm              # deterministic pipeline only
     python3 code/main.py --requests dataset/sample_deletion_requests.csv --output /tmp/sample.csv
+
+The review queue lands next to the output file unless --review-queue says otherwise.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from pathlib import Path
 
 from deletion_audit.config import DATASET_DIR, OUTPUT_CSV, RUNS_DIR
 from deletion_audit.dataset import load_requests
-from deletion_audit.output import validate_file, write_output
+from deletion_audit.output import validate_file, write_output, write_review_queue
 from deletion_audit.pipeline import AuditPipeline
 
 
@@ -25,6 +27,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--requests", type=Path, default=None, help="defaults to <dataset>/deletion_requests.csv")
     parser.add_argument("--output", type=Path, default=OUTPUT_CSV)
     parser.add_argument("--no-llm", action="store_true", help="skip model calls (deterministic baseline)")
+    parser.add_argument("--review-queue", type=Path, default=None,
+                        help="cases a person should check (default: review_queue.csv next to --output)")
     return parser.parse_args(argv)
 
 
@@ -42,6 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     for result in results:
         counts[result.status.value] = counts.get(result.status.value, 0) + 1
     logging.info("wrote %d rows to %s %s", len(results), args.output, counts)
+    queue = args.review_queue or args.output.with_name("review_queue.csv")
+    flagged = sum(1 for r in results if r.review)
+    logging.info("wrote %d review items for %d cases to %s", write_review_queue(results, queue), flagged, queue)
     if pipeline.client is not None:
         fallbacks = [r.case_id for r in results if any(n.startswith("model review unavailable") for n in r.notes)]
         errors = [r.case_id for r in results if any(n.startswith("error:") for n in r.notes)]

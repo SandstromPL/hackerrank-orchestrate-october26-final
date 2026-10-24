@@ -66,19 +66,19 @@ class ScreenTranscript(BaseModel):
 def read_screenshots(client: LLMClient, dataset: Dataset) -> dict[str, list[dict]]:
     """file_id -> transcribed records, for every PNG in the manifest that the model read."""
     system = (Path(__file__).parent / "prompts" / "screenshot.md").read_text(encoding="utf-8")
-    transcripts: dict[str, list[dict]] = {}
-    for evidence in dataset.manifest:
-        path = dataset.root / evidence.path
-        if path.suffix.lower() != ".png":
-            continue
-        image = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    screenshots = [e for e in dataset.manifest if (dataset.root / e.path).suffix.lower() == ".png"]
+    jobs = []
+    for evidence in screenshots:
+        image = base64.standard_b64encode((dataset.root / evidence.path).read_bytes()).decode("ascii")
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
             {"type": "text", "text": f"Screenshot {evidence.file_id} from {evidence.origin}, captured "
                                      f"{evidence.captured_at.isoformat()}. Transcribe its records."},
         ]
-        raw = client.complete_json(purpose="screenshot", version=PROMPT_VERSION, system=system, content=content,
-                                   schema=SCHEMA, validate=ScreenTranscript.model_validate)
+        jobs.append(dict(purpose="screenshot", version=PROMPT_VERSION, system=system, content=content,
+                         schema=SCHEMA, validate=ScreenTranscript.model_validate))
+    transcripts: dict[str, list[dict]] = {}
+    for evidence, raw in zip(screenshots, client.complete_many(jobs)):
         if raw is None:
             continue
         try:

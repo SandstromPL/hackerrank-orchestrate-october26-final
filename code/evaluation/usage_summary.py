@@ -105,6 +105,9 @@ def build_report(run: dict, rows: list[tuple[str, dict]], record_name: str) -> s
     fallbacks = run["model_fallback_cases"]
     wall = datetime.fromisoformat(run["finished_at"]) - datetime.fromisoformat(run["started_at"])
     price = PRICING.get(run["model"], {})
+    in_flight = run.get("max_concurrency", 1)  # run records from before parallel calls have no such field
+    pacing = (f"up to {in_flight} in flight, starts spaced to {run.get('calls_per_second', 0):g}/s"
+              if in_flight > 1 else "one at a time")
     lines = [
         "# Usage report: final full run",
         "",
@@ -119,6 +122,7 @@ def build_report(run: dict, rows: list[tuple[str, dict]], record_name: str) -> s
         f"| Requests audited | {cases} (`{run['requests']}`) |",
         f"| Statuses written to `{run['output']}` | {statuses} |",
         f"| Provider / model | {run['provider']} / {run['model']} |",
+        f"| Model calls | {pacing} |",
         f"| Model answers used | {sum(answers.values())}: {answers['live']} made during the run, "
         f"{answers['cache']} replayed from the response cache, {answers['failed']} failed |",
         f"| Cases that kept the deterministic result (no usable model answer) | {len(fallbacks)}"
@@ -130,6 +134,9 @@ def build_report(run: dict, rows: list[tuple[str, dict]], record_name: str) -> s
         "- One adjudication call per audited case: deletion intent, ownership of softly linked records, and "
         "category refinement. Code merges the answer under fixed guardrails and applies the deletion policy.",
         "- One vision call per screenshot in the evidence manifest, made once at start-up and shared by every case.",
+        "- Independent calls run on a thread pool (`LLM_MAX_CONCURRENCY` in flight, starts spaced to "
+        "`LLM_CALLS_PER_SECOND`); the SDK retries rate-limit errors with backoff. A per-run memo answers a "
+        "repeated input once.",
         "- A reply that is not valid JSON or fails schema validation is retried once with the error attached. "
         "Both attempts are billed and counted below.",
         "- Validated answers are cached on disk under a hash of provider, model, prompt version, schema and input. "
@@ -169,7 +176,7 @@ def build_report(run: dict, rows: list[tuple[str, dict]], record_name: str) -> s
         "- Costs are estimates: the token counts the API returned for each call, priced with the table in "
         "`code/deletion_audit/llm_client.py`.",
         f"- Calls made during the run: {live['calls']:.0f}, {live['seconds'] / 60:.1f} min of model time, "
-        f"{live['seconds'] / max(live['calls'], 1):.1f} s per call on average (calls run one at a time).",
+        f"{live['seconds'] / max(live['calls'], 1):.1f} s per call on average ({pacing}).",
         "",
     ]
     return "\n".join(lines)

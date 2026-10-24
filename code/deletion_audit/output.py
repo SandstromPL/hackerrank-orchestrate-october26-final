@@ -1,4 +1,4 @@
-"""Write and validate output.csv (`case_id,deletion_status,steps_json`)."""
+"""Write and validate output.csv (`case_id,deletion_status,steps_json`); write review_queue.csv."""
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import json
 from pathlib import Path
 
 from .domain import (OPERATION_PHASE, OPERATION_STATE, PHASE_ORDER, CaseResult, DeletionStatus, Operation, Phase,
-                     case_sort_key)
+                     ReviewReason, case_sort_key)
 from .steps import serialize
 
 HEADER = ["case_id", "deletion_status", "steps_json"]
+REVIEW_HEADER = ["case_id", "deletion_status", "priority", "reason", "detail"]
+REVIEW_ORDER = {reason: rank for rank, reason in enumerate(ReviewReason)}  # declaration order: most severe first
 
 
 def write_output(results: list[CaseResult], path: Path) -> None:
@@ -20,6 +22,18 @@ def write_output(results: list[CaseResult], path: Path) -> None:
         writer.writerow(HEADER)
         for result in rows:
             writer.writerow([result.case_id, result.status.value, serialize(list(result.steps))])
+
+
+def write_review_queue(results: list[CaseResult], path: Path) -> int:
+    """One row per (case, reason) a person should check; returns the number of rows written."""
+    rows = sorted(((r.case_id, r.status.value, item.reason.priority, item.reason.value, item.detail)
+                   for r in results for item in set(r.review)),
+                  key=lambda row: (case_sort_key(row[0]), REVIEW_ORDER[ReviewReason(row[3])], row[4]))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(REVIEW_HEADER)
+        writer.writerows(rows)
+    return len(rows)
 
 
 def validate_row(status: str, steps_json: str) -> list[str]:

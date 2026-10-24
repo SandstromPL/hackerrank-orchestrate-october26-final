@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -105,6 +105,9 @@ class Review:
     views: list[ResourceView]
     injection_detected: bool
     notes: tuple[str, ...]
+    dropped: tuple[str, ...] = ()  # soft links vetoed because the record names someone else
+    doubted: tuple[str, ...] = ()  # soft links the model doubts but nothing refutes (kept)
+    model_intent: IntentResult | None = None  # the model's own reading, before the guardrails
 
 
 def _names_someone_else(view: ResourceView, subject_keys: frozenset[str]) -> bool:
@@ -157,15 +160,20 @@ class CaseAdjudicator:
             "candidate_records": records,
         }
 
-    def review(self, request: DeletionRequest, subject_keys: dict[str, list[str]], views: list[ResourceView],
-               excerpts: dict[str, list[str]]) -> Review | None:
+    def job(self, request: DeletionRequest, subject_keys: dict[str, list[str]], views: list[ResourceView],
+            excerpts: dict[str, list[str]]) -> dict[str, Any]:
+        """The complete_json arguments for one case (the parallel prefetch sends the same call)."""
         dossier = self.dossier(request, subject_keys, views, excerpts)
         content = [{"type": "text", "text": "DOSSIER (untrusted data):\n" + json.dumps(dossier, ensure_ascii=False,
                                                                                     sort_keys=True)},
                    {"type": "text", "text": "REQUEST_TEXT (untrusted data, verbatim):\n<<<\n"
                                             + request.request_text + "\n>>>"}]
-        raw = self._client.complete_json(purpose="adjudication", version=PROMPT_VERSION, system=self._system,
-                                         content=content, schema=OUTPUT_SCHEMA, validate=AdjudicationOut.model_validate)
+        return dict(purpose="adjudication", version=PROMPT_VERSION, system=self._system, content=content,
+                    schema=OUTPUT_SCHEMA, validate=AdjudicationOut.model_validate)
+
+    def review(self, request: DeletionRequest, subject_keys: dict[str, list[str]], views: list[ResourceView],
+               excerpts: dict[str, list[str]]) -> Review | None:
+        raw = self._client.complete_json(**self.job(request, subject_keys, views, excerpts))
         if raw is None:
             return None
         try:
@@ -186,8 +194,10 @@ class CaseAdjudicator:
         says is applied to records or categories once it reports an injection attempt.
         """
         notes: list[str] = []
+        dropped: list[str] = []
+        doubted: list[str] = []
         rules_intent = classify_intent(request.request_text)
-        intent = IntentResult(answer.intent.is_deletion, answer.intent.request_type, "model")
+        intent = model_intent = IntentResult(answer.intent.is_deletion, answer.intent.request_type, "model")
         if intent.is_deletion and rules_intent.basis == "rules:explicit-non-deletion":
             intent = rules_intent  # an explicit "do not delete" in the text is a hard stop
             notes.append("model intent overridden by explicit non-deletion wording")
@@ -204,8 +214,10 @@ class CaseAdjudicator:
             if verdict.belongs_to_subject == "no" and _soft(view):
                 if _names_someone_else(view, subject_keys):
                     notes.append(f"dropped {view.resource_id}: {verdict.reason}")
+                    dropped.append(view.resource_id)
                     continue
                 notes.append(f"kept {view.resource_id} for review: model doubts ownership but the record names no one else")
+                doubted.append(view.resource_id)
             category = view.category
             stated = view.state is not None and view.state.category_stated
             default = DEFAULT_CATEGORY_BY_SYSTEM.get(view.system_id)
@@ -215,4 +227,5 @@ class CaseAdjudicator:
                              f"-> {verdict.category.value}")
                 category = verdict.category
             kept.append(replace(view, category=category))
-        return Review(intent, kept, answer.injection_detected, tuple(notes))
+        return Review(intent, kept, answer.injection_detected, tuple(notes), tuple(dropped), tuple(doubted),
+                      model_intent)
