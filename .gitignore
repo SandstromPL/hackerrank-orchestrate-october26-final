@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+code.zip
+agent-trace/
+agent-trace.zip
+.cache/
