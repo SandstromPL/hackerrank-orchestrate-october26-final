@@ -1,15 +1,18 @@
 # Evaluation report
 
-Status: deterministic pipeline and DeepSeek model review (`deepseek-flash`) both evaluated.
-On the 32 samples the two paths score identically; the model's measurable effect is on our custom
-cases and on the screenshot-based eval cases (section "Model review with DeepSeek").
+Status: the submitted `output.csv` comes from the full 518-case run with DeepSeek model review
+(`deepseek-flash`, 2026-10-24, run record `20261024T152551Z`). On the 32 samples the code-only and
+model paths score identically; on the 518 eval requests the model changed one case (section
+"Final full run"). Tokens and cost are in `usage_report.md`.
 
 ## How to reproduce
 
 ```bash
+python3 code/main.py                            # full run (518 requests) -> output.csv + run record
+python3 code/evaluation/usage_summary.py --write  # usage_report.md from the latest full-run record
 python3 code/evaluation/main.py                 # samples + custom cases, saves .cache/eval/<run>.json
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # single-flag ablation
-python3 -m pytest -q code/tests                 # 15 unit tests
+python3 -m pytest -q code/tests                 # 17 unit tests
 ```
 
 ## Metrics
@@ -75,6 +78,57 @@ test and three screenshot versions 94 calls / $0.076 (59 reviews, 34 screenshot 
 One review averages 1,950 input tokens, $0.0005 and 4.0 s, so a full 518-case run projects to
 about $0.26 off-peak ($0.53 peak) and ~35 minutes sequentially.
 
+## Final full run (518 eval requests, DeepSeek review)
+
+`python3 code/main.py`, 2026-10-24 15:26-16:02 UTC (36.1 min, one call at a time). It used 529
+model answers (518 case reviews and 11 screenshot transcripts): 506 made during the run, 23
+replayed from the response cache, 0 failed. No case fell back to the deterministic result and
+none raised an error. Cost: $0.315 for 530 billed calls, all off-peak. The projection was
+$0.26 because eval dossiers carry a few more records than the samples. Details in
+`usage_report.md`.
+
+Validation of `output.csv`:
+
+| Check | Result |
+|---|---|
+| Contract (`validate_file`: header, 518 rows, order, 7-key steps, phase order, operation/state pairs, where evidence may be cited) | 0 violations |
+| Every cited `evidence_id` exists (manifest, activity or audit log) and is dated at or before its case's `audit_at` | 1,073 citations, 0 problems |
+| Row order equals `deletion_requests.csv` | yes |
+| Deletion cases with no steps | 1 (case_63, still open) |
+
+Before -> after on the eval set (no labels, so this compares the two paths):
+
+| | Code only | Code + model review |
+|---|---|---|
+| COMPLETE / INCOMPLETE / NOT_APPLICABLE | 154 / 354 / 10 | 154 / 354 / 10 |
+| Steps in `output.csv` | 2,852 | 2,855 |
+| Cases whose output differs | | 1 of 518 (case_34) |
+
+case_34 (user_11) gains REPORT_REMAINING_RECORD `support_9538` (evidence_04), DELETE_RECORD and
+VERIFY_RECORD_ABSENT. Checked by hand against the evidence:
+- evidence_01 (09-15) shows an attachment PII scan of `support_9538`
+  (`delivery_confirmation_32.pdf`) matching the subject's pre-May phone from the audit log. That
+  links the record, but it predates the 09-24 request, so it gives no state at audit.
+- The 09-26 admin screen (evidence_04) still lists the ticket on the subject's profile, which gives the
+  state at audit. The code-only path cannot read that row, because OCR emits only
+  catalog-anchored records.
+- The model refined the category from the system default SUPPORT_MESSAGE to
+  SUPPORT_ATTACHMENT (rule_06: DELETE), citing the attachment scan.
+
+What the model judged across all 518 cases (replayed from the cache, no new calls):
+
+- Intent: agreed with the rule classifier on 518/518, including 62 non-English requests
+  (Portuguese 14, Korean 12, Japanese 12, French 12, Spanish 12). 508 were deletion requests;
+  the 10 non-deletion requests were typed as correction 2, marketing opt-out 2, data export 2,
+  account support 2, access 1 and billing 1.
+- Prompt injection: none flagged.
+- Ownership: 1,232 records "yes", 183 "uncertain", 0 "no", so no record was dropped.
+- Category: 1 refinement (case_34 above).
+
+Still open: case_63 is COMPLETE with no steps. Its only candidate record, `marketing_001`, is
+claimed for this subject by the data catalog, but the screen shows a different person, so the
+claim is rejected.
+
 ## Iteration log (samples)
 
 | Run | Change | Status | P | R | F1 | Seq | Kept? |
@@ -126,3 +180,8 @@ Defined in `code/evaluation/custom_cases.py` (real users and evidence, one input
 7. Vision transcripts (DeepSeek): misread identifiers, labels returned as IDs and list rows linking
    wholesale -> anchored-only linking with fuzzy corroboration, alias mapping, prompt v3, and an OCR
    backstop for anchored records (unit test added).
+8. Usage accounting: the usage log recorded only billed calls, so a run that replayed cached
+   answers (the 11 screenshot transcripts) would have under-reported its cost -> `main.py` saves a
+   run record of every answer used (live, cached, failed) and `usage_summary.py` joins it with the
+   billed-call log by input hash, counting the original call behind each cached answer (2 unit
+   tests).
