@@ -364,10 +364,10 @@ From the repository root (the archive holds `README.md` and `code/`, never `data
 `.cache/` or the virtual environment):
 
 ```bash
-zip -r code.zip README.md code -x "*/__pycache__/*" "*/.venv/*" "*/venv/*" "*/node_modules/*" "*/.git/*" "*/.DS_Store"
+zip -r code.zip README.md code -x "*/__pycache__/*" "*/.pytest_cache/*" "*/.venv/*" "*/venv/*" "*/node_modules/*" "*/.git/*" "*/.DS_Store"
 ```
 
-On Windows (PowerShell), remove any `code/__pycache__` folders first:
+On Windows (PowerShell), remove any `__pycache__` and `.pytest_cache` folders under `code/` first:
 
 ```powershell
 Compress-Archive -Path README.md, code -DestinationPath code.zip -Force

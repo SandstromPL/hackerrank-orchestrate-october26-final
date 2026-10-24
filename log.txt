@@ -342,3 +342,25 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T17:32:00+00:00] Build and verify code.zip
+
+User Prompt (verbatim, secrets redacted):
+Build code.zip with the README command, list its contents, and check it has no dataset, venv, caches, secrets or nested archives. We'll rebuild it if the code changes later.
+
+Agent Response Summary:
+Before building, I found code/tests/.pytest_cache, left by earlier test runs, which the README zip command did not exclude. I deleted it and added "*/.pytest_cache/*" to the README command (and to the Windows note) so later rebuilds stay clean. I then built code.zip with the README command from the repo root: 92.7 KB, 47 entries (41 files), README.md and code/ at the top level, and it passes the integrity test. Every check passed: no dataset, virtualenv, bytecode, caches, .env, .git or nested archives; no raw data files; all required files present (main.py, requirements.txt, both evaluation reports, both prompts). A secret scan of every file found no match for the real DeepSeek key (compared, never printed) and no match for four credential patterns. A clean extract plus the dataset ran the code-only pipeline in 8 s with byte-identical output, and its 21 tests pass.
+
+Actions:
+* README.md: added the .pytest_cache exclusion to the packaging command; removed code/tests/.pytest_cache
+* Ran the README zip command; unzip -l; zipfile checks (exclusions, required files, secret scan)
+* Extracted to the scratchpad, ran main.py --no-llm and pytest there, and compared the output with cmp
+* Committed README.md and log.txt (code.zip is git-ignored)
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
