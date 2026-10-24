@@ -364,3 +364,24 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T17:36:36+00:00] Interview notes
+
+User Prompt (verbatim, secrets redacted):
+Before the agent trace, write concise interview notes in initials.md style: architecture, the key decisions and why, the eval numbers, and likely interviewer questions with answers.
+
+Agent Response Summary:
+I read initials.md for its style (numbered sections, key-value tables, bold lead-ins) and its §11 probe list. I wrote interview_notes.md in Paritosh's first-person voice, ordered by that probe list: a 30-second pitch, the architecture with a module map, where the model is used and its guardrails, a decisions table with reasons and proof, the eval numbers, three case walk-throughs (case_34, case_63, custom_02), 13 likely questions with answers, honest limits, and next steps. I re-checked every quoted number against the evaluation and usage reports and the code, then fixed six inaccuracies in my own draft. Examples: the original options were A (deterministic engine), B (agentic investigator) and C (hybrid adjudicator); case_50 lost an analytics record, not an account; the malformed-JSON retry happened in the information-time run. The file is untracked, like initials.md, and is not in code.zip.
+
+Actions:
+* Read initials.md; grepped the session transcript for the original architecture options
+* Wrote interview_notes.md (241 lines) and corrected it after the fact-check
+* No code changes; log.txt appended
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
