@@ -74,6 +74,7 @@ def ledger_observation(
         restore_allowed=flag if category == Category.BACKUP_ARCHIVE else None,
         excerpt=excerpt[:600],
         unit_id=unit_id,
+        category_stated=category is not None,
     )
 
 

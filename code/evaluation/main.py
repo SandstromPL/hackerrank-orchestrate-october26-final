@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.predictions:
         predicted = read_rows(args.predictions)
     else:
-        pipeline = AuditPipeline(DATASET_DIR, policy)
+        pipeline = AuditPipeline(DATASET_DIR, policy, use_llm=not args.no_llm)
         predicted = run_pipeline(pipeline, load_requests(DATASET_DIR / "sample_deletion_requests.csv"))
     invalid = {cid: validate_row(*row) for cid, row in predicted.items() if validate_row(*row)}
     sample_report = Report([score_case(cid, expected[cid], predicted.get(cid, ("MISSING", "[]")))

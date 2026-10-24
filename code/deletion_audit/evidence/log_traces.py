@@ -23,7 +23,7 @@ TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+(.*)$")
 KV_RE = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)')
 SYSLOG_RE = re.compile(r"^<\d+>\d+\s+(\S+)\s+(\S+)\s+(\S+)\s+-\s+-\s+(.*)$")
 BRACKET_RE = re.compile(r"^\[(\w+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+([\w.]+):\s*(.*)$")
-PIPE_RE = re.compile(r"^(\w+)\s+\|\s+(\S+)\s+\|\s+(\S+)\s+\|\s+(\S+)\s+\|\s*(.*)$")
+PIPE_RE = re.compile(r"^\|\s*(\w+)\s+\|\s+(\S+)\s+\|\s+(\S+)\s+\|\s+(\S+)\s+\|\s*(.*)$")
 CLOUD_RE = re.compile(r'^requestId=(\S+)\s+level=(\w+)\s+function=(\S+)\s+message="(.*)"\s*$')
 
 LINK_FIELDS = (

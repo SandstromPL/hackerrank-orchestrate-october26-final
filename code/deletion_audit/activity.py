@@ -105,8 +105,10 @@ class WorkflowBatches:
     names the person.
     """
 
-    def __init__(self, activity: list[ActivityEvent], before: timedelta = timedelta(hours=3),
-                 after: timedelta = timedelta(minutes=30)) -> None:
+    # Samples show batch rows 45-75 min before reported_at (generated runs) or within ±10 min (manual
+    # runs); a wider window pulls in the neighbouring hourly batches.
+    def __init__(self, activity: list[ActivityEvent], before: timedelta = timedelta(minutes=80),
+                 after: timedelta = timedelta(minutes=10)) -> None:
         self._rows = sorted((e for e in activity if e.source_system in WORKFLOW_ACTORS),
                             key=lambda e: (e.event_time, e.activity_id))
         self._before, self._after = before, after

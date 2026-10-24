@@ -46,11 +46,19 @@ def _similar(a: str, b: str) -> bool:
     return SequenceMatcher(None, a, b).ratio() >= 0.85
 
 
-def _corroborated(link: CatalogLink, text: str) -> bool:
+def _catalog_link_holds(link: CatalogLink, text: str) -> bool:
+    """A catalog link is a claim: accept it when the screen shows the person, or shows nobody.
+
+    A screen that shows someone else's contact details (and not the catalog person's)
+    contradicts the claim, and we never act on another person's record.
+    """
     lowered = text.lower()
     if link.user_id and re.search(rf"\b{re.escape(link.user_id)}\b", lowered):
         return True
-    return any(_similar(link.email, m.group(0).lower()) for m in EMAIL_RE.finditer(text))
+    emails = [m.group(0).lower() for m in EMAIL_RE.finditer(text)]
+    if any(_similar(link.email, email) for email in emails):
+        return True
+    return not emails and not extract_direct(text)
 
 
 def _anchors(evidence: EvidenceFile, text: str, catalog: list[CatalogLink]) -> list[CatalogLink]:
@@ -75,13 +83,17 @@ def _ocr_flags(category: Category | None, text: str) -> tuple[bool | None, bool 
     if category == Category.BACKUP_ARCHIVE:
         if any(word in lowered for word in ("restore blocked", "restore disabled", "restore denied")):
             restore = False
-        elif any(word in lowered for word in ("restore allowed", "restorable", "restore available")):
-            restore = True
+        elif any(word in lowered for word in ("restore allowed", "restorable", "restore available", "recovery manager")):
+            restore = True  # an archive listed in a live recovery console with no block shown can be restored
     return enabled, restore
 
 
-def observations_from_vision(evidence: EvidenceFile, records: list[dict]) -> ParsedEvidence:
-    """Observations from the cached vision extraction (one entry per record shown on screen)."""
+def observations_from_vision(evidence: EvidenceFile, records: list[dict], catalog: list[CatalogLink]) -> ParsedEvidence:
+    """Observations from the cached vision extraction (one entry per record shown on screen).
+
+    Each record links through its own identifiers; a catalog claim about the same resource adds
+    the catalog person only if the record shows that person or shows nobody.
+    """
     parsed = ParsedEvidence()
     for index, record in enumerate(records):
         resource_id = str(record.get("resource_id") or "").strip()
@@ -89,6 +101,9 @@ def observations_from_vision(evidence: EvidenceFile, records: list[dict]) -> Par
             continue
         system_id = str(record.get("system_id") or "")
         identifiers = {normalize(str(v)) for v in record.get("identifiers", []) if normalize(str(v))}
+        for link in catalog:
+            if link.resource_id == resource_id and (not identifiers or identifiers & {link.email, link.user_id}):
+                identifiers |= {link.email, link.user_id}
         direct = {key for key in identifiers if not USER_RE.fullmatch(key)}
         direct |= {"name:" + str(n).lower() for n in record.get("names", []) if n}
         try:
@@ -121,7 +136,7 @@ def parse_screenshot(
     vision_records: list[dict] | None = None,
 ) -> ParsedEvidence:
     if vision_records is not None:
-        return observations_from_vision(evidence, vision_records)
+        return observations_from_vision(evidence, vision_records, catalog)
     parsed = ParsedEvidence()
     text = ocr_text(path, cache_dir / "ocr")
     if not text:
@@ -133,7 +148,7 @@ def parse_screenshot(
         enabled, restore = _ocr_flags(category, text)
         # Other rows on the same screen belong to other people, so only the catalog person links,
         # and only when the screen itself shows one of their identifiers.
-        keys = {link.email, link.user_id} if _corroborated(link, text) else set()
+        keys = {link.email, link.user_id} if _catalog_link_holds(link, text) else set()
         parsed.observations.append(
             Observation(
                 evidence_id=evidence.file_id,

@@ -187,6 +187,7 @@ class Observation:
     excerpt: str = ""
     unit_id: str = ""
     related_resources: frozenset[str] = frozenset()
+    category_stated: bool = False  # the evidence itself names the category (ledger rows)
 
     @property
     def identifiable(self) -> bool:

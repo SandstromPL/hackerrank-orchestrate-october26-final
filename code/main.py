@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     requests_path = args.requests or args.dataset / "deletion_requests.csv"
     requests = load_requests(requests_path)
-    pipeline = AuditPipeline(args.dataset)
+    pipeline = AuditPipeline(args.dataset, use_llm=not args.no_llm)
     results = pipeline.run(requests)
     write_output(results, args.output)
     problems = validate_file(args.output, [r.case_id for r in requests])
