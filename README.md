@@ -24,9 +24,10 @@ The challenge contract is in `problem_statement.md` and `AGENTS.md` in the chall
 
 | Set | Result |
 |---|---|
-| 32 public samples (scored against `sample_output.csv`) | status accuracy 1.000, step precision / recall / F1 1.000 / 0.933 / 0.965, sequence accuracy 0.656 (21/32), 0 contract violations |
+| 32 public samples (scored against `sample_output.csv`) | status accuracy 1.000, step precision / recall / F1 1.000 / 0.938 / 0.968, sequence accuracy 0.656 (21/32), 0 contract violations |
 | 4 hand-built cases (`code/evaluation/custom_cases.py`) | status accuracy 0.750 code-only, 1.000 with the model review |
-| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,977 steps, 0 contract violations, all 1,082 citations exist and predate `audit_at`. 529 model answers: 14 made in the final run, the rest replayed from the response cache. Everything behind the file cost $0.353 (531 billed calls). |
+| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,997 steps, 0 contract violations, all 1,102 citations exist and predate `audit_at`. 529 model answers: 20 made in the final run (19 s, 8 calls in flight), the rest replayed from the response cache. Everything behind the file cost $0.352 (530 billed calls). |
+| Review queue (`review_queue.csv`) | 351 items in 271 cases: 138 ambiguous accounts, 10 accounts not found, 202 possible analytics profiles, 1 status taken from the workflow's claim; 0 model fallbacks, 0 case errors. |
 
 Details: [`code/evaluation/evaluation_report.md`](code/evaluation/evaluation_report.md) and
 [`code/evaluation/usage_report.md`](code/evaluation/usage_report.md).
@@ -72,6 +73,8 @@ lines, because values are read verbatim to the end of the line.
 | `ANTHROPIC_API_KEY` | (none) | Anthropic key, for the alternative backend. |
 | `AUDIT_MODEL` | `claude-opus-5-5` | Anthropic model name. |
 | `AUDIT_EFFORT` | `medium` | Anthropic effort level. |
+| `LLM_MAX_CONCURRENCY` | `8` | Model calls in flight at once (`1` = one at a time). |
+| `LLM_CALLS_PER_SECOND` | `4` | Most call starts per second across all threads (`0` = no limit). Rate-limit errors are retried by the SDK with backoff. |
 
 Secrets are read only from the environment. `.env` is git-ignored and is not part of `code.zip`.
 
@@ -82,20 +85,22 @@ the commands work from any directory. Relative paths you pass in flags resolve f
 directory.
 
 ```bash
-python3 code/main.py                                  # full run: 518 requests -> output.csv
+python3 code/main.py                                  # full run: 518 requests -> output.csv + review_queue.csv
 python3 code/main.py --no-llm                         # deterministic pipeline only, no model calls
 python3 code/main.py --requests dataset/sample_deletion_requests.csv --output /tmp/sample.csv
 python3 code/evaluation/main.py                       # score samples + custom cases
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # one-flag ablation
 python3 code/evaluation/usage_summary.py --write      # usage_report.md from the latest full run
-python3 -m pytest -q code/tests                       # 21 unit tests, offline
+python3 -m pytest -q code/tests                       # 25 unit tests, offline
 ```
 
-A full run with the model makes one review call per case, one at a time. It logs progress every 50
-cases. From an empty cache it takes about 40 minutes and $0.36 at DeepSeek off-peak prices. Answers replayed from the
-local cache cost nothing and finish in seconds. `--no-llm` needs no network. Once Tesseract's
-text for the 11 screenshots is cached it runs in under a second; the first run also OCRs them.
-`main.py` validates the file it wrote and exits 1 on any contract violation.
+A full run with the model makes one review call per case, up to 8 at a time, and logs progress
+every 50 cases. On the 32 samples with an empty cache, parallel calls cut the run from 267 s to
+63 s for the same calls and cost. A cold 518-case run took 36 minutes one call at a time and should
+take about 7 minutes now (about $0.35 at DeepSeek off-peak prices). Answers replayed from the
+local cache cost nothing; the full run then finishes in about 20 s. `--no-llm` needs no network.
+Once Tesseract's text for the 11 screenshots is cached it runs in under a second; the first run
+also OCRs them. `main.py` validates the file it wrote and exits 1 on any contract violation.
 
 ## Inputs and outputs
 
@@ -111,6 +116,7 @@ Written:
 | Path | Contents |
 |---|---|
 | `output.csv` | `case_id,deletion_status,steps_json`, one row per request, sorted by `case_id` in natural order (case_33 ... case_550, the same order as the request file). Each step has exactly the 7 contract fields and is serialized as compact JSON. |
+| `review_queue.csv` | `case_id,deletion_status,priority,reason,detail`: the calls the evidence could not settle safely, for a person to check (next to `--output`; never changes `output.csv`). Priority 1: the status may be wrong (case error, unresolved subject, model unavailable, rules and model disagree on intent, injection, status taken from the workflow's claim). Priority 2: a record may be missing or wrongly kept (ambiguous or missing account, doubted or dropped soft link). Priority 3: only the check of an already-compliant record may be missing (a possible anonymized analytics profile). Ambiguity rows name the competing batch-mates, so one decision settles them all. |
 | `.cache/llm/*.json` | Validated model answers, keyed by a hash of provider, model, prompt (version and text), schema and input. |
 | `.cache/llm/usage.jsonl` | One line per billed API call: tokens, cost, latency, timestamp and cache key. |
 | `.cache/llm/runs/*.json` | One record per model-enabled run, listing every answer it used (live, cached or failed). |
@@ -122,6 +128,7 @@ Written:
 
 ```text
 start-up  load the CSVs; parse all 94 evidence files once (screenshots read by the model if configured)
+prefetch  build every case's dossier; send the reviews on a rate-limited pool   pipeline.py, llm_client.py
 per case  1. intent    rule classifier on request_text                    intent.py
           2. identity  email -> user_id and every historical identifier   identity.py
           3. link      evidence records tied to those identifiers         linking.py
@@ -129,12 +136,14 @@ per case  1. intent    rule classifier on request_text                    intent
           5. review    one model call, merged by code (optional)          adjudication.py
           6. policy    deletion_rules.csv -> finding, fix, check          policy.py
           7. steps     order, number, cite; NOT_APPLICABLE -> []          steps.py
-end       write and validate output.csv; save the run record              output.py, main.py
+end       write and validate output.csv; write review_queue.csv; save the run record   output.py, main.py
 ```
 
 The deterministic pass always runs first. When a model is configured, it reviews the case. Code
 merges the review and re-applies the policy. If the model call fails, the deterministic result
-stands.
+stands. The reviews are independent, so they are sent up front, up to `LLM_MAX_CONCURRENCY` at a
+time; the per-case pass then reads each answer from the client's per-run memo, single-threaded and
+in case order, so the output never depends on timing.
 
 | Stage | Module | What it does |
 |---|---|---|
@@ -142,13 +151,13 @@ stands.
 | Identity | `identity.py` | Maps the request email to a `user_id` through the current snapshot and the audit-log history. It resolves only when the email has exactly one owner. Subject keys are the `user_id` plus every current and historical email, email hash and phone (digits only). |
 | Evidence | `evidence/*.py`, `screenshot_reader.py` | Turns every file into `Observation` records (resource, system, category, exists, direct identifiers, user references, link keys, enabled / restore flags). Snapshots also produce `Coverage` records, which prove absence. Parsers: SQL (executed in in-memory SQLite, replicas included), JSON (bundles, exports, collection dumps, ledgers), logs (seven layouts grouped into traces), the TXT handover, PDFs (text layer via `pypdf`), screenshots (model transcript plus Tesseract backstop). Each file is parsed in isolation, so one bad file cannot stop the run. |
 | Activity | `activity.py` | Extracts the few activity rows that carry facts: data-catalog `LINK_RESOURCE_IDENTITY` rows, point-in-time `CHECK_*` rows, workflow batches (requests that share a `reported_at`), and the operation the workflow requested for each resource (context for the model). |
-| Linking + state | `linking.py` | Links records to the subject's keys using information timed at or before `audit_at`, even a snapshot inside a file exported later. Takes each record's state from observations inside [`requested_at`, `audit_at`] in files captured by `audit_at`. Also recovers accounts from workflow batches (below). |
+| Linking + state | `linking.py` | Links records to the subject's keys using information timed at or before `audit_at`, even a snapshot inside a file exported later. Takes each record's state from observations inside [`requested_at`, `audit_at`] in files captured by `audit_at`. Also recovers accounts and anonymized analytics profiles from workflow batches (below). |
 | Intent | `intent.py` | Rule-based classifier: the fallback when no model is configured, and the hard stop for explicit "not asking for deletion" wording. |
 | Model review | `adjudication.py`, `prompts/adjudication.md` | One structured call per case, merged under guardrails (next section). |
 | Policy | `policy.py` | The only place that maps (category, state) to operations, per `deletion_rules.csv`. |
-| Steps + output | `steps.py`, `output.py` | Builds, orders, numbers and serializes steps; writes and validates `output.csv`. |
-| Orchestration | `pipeline.py`, `main.py` | Runs cases in order and isolates each one: an exception is logged and the case gets a fallback `INCOMPLETE`, `[]` row. Saves the run record. |
-| Model client | `llm_client.py` | DeepSeek and Anthropic behind one `complete_json` call: response cache, one corrective retry, usage log, run record. |
+| Steps + output | `steps.py`, `output.py` | Builds, orders, numbers and serializes steps; writes and validates `output.csv`; writes `review_queue.csv`. |
+| Orchestration | `pipeline.py`, `main.py` | Prefetches the model reviews concurrently, then runs cases in order and isolates each one: an exception is logged and the case gets a fallback `INCOMPLETE`, `[]` row. Records review items per case. Saves the run record. |
+| Model client | `llm_client.py` | DeepSeek and Anthropic behind one `complete_json` call: response cache (atomic writes), per-run memo, one corrective retry, thread pool with an in-flight cap and a start-rate limiter, usage log, run record. |
 | Policy flags | `config.py` | `AuditPolicy` holds the interpretation choices the samples do not settle, each with an ablation in the evaluation report. |
 
 ### Where the model is used, and how it is contained
@@ -217,13 +226,23 @@ Code applies the review under rules that a manipulated answer cannot get around
 - **Absence needs proof.** Apart from batch-recovered accounts (next point), a record is treated as
   absent only on an observation, or on a snapshot that covers its system and lacks it. A record
   whose state the evidence does not establish produces no step at all.
-- **Account recovery.** Some accounts appear only in deletion-worker rows inside a workflow batch
-  shared by several requests. Recovery removes accounts that evidence ties to someone else, then
-  assigns by elimination across all batches, sudoku-style. It also requires the account step's
-  reported result to agree with the request's `reported_status`; that is used only for pairing,
-  never as proof. Ambiguous batches stay unassigned. Such an account counts as absent: in an
-  `INCOMPLETE` case it gets a future `VERIFY_RECORD_ABSENT`, and in a `COMPLETE` case it is
-  verified only when an observation or snapshot proves the absence.
+- **Batch recovery** (`BatchRecovery` in `linking.py`). Some accounts appear only in
+  deletion-worker rows inside a workflow batch shared by several requests. Recovery removes records
+  that evidence ties to someone else, then assigns by elimination across all batches,
+  sudoku-style. Ambiguous batches stay unassigned and go to the review queue with their
+  batch-mates.
+  - **Accounts** also require the account step's reported result to agree with the request's
+    `reported_status`; that is used only for pairing, never as proof. A recovered account counts as
+    absent: in an `INCOMPLETE` case it gets a future `VERIFY_RECORD_ABSENT`, and in a `COMPLETE`
+    case it is verified only when an observation or snapshot proves the absence.
+  - **Precision check without labels:** hide each account that identifiers already link (185 with
+    a batch row), treat it as anonymous, and re-run the elimination. It returns 141 to their own
+    request, abstains on 44 and assigns none to the wrong request.
+  - **Anonymized analytics profiles** (`recover_analytics_from_activity`) name no one, so their
+    `ANONYMIZE_RECORD` row is their only trace. The same elimination runs without outcome matching,
+    because runs that report NOT_STARTED still anonymize (3 of the 7 such sample profiles). A
+    profile is assigned only when the request is the sole claimant left for its row, and it yields
+    a step only when an in-window observation shows its state.
 - **Screenshots link only through the data catalog.** A screen is a list view. Only the record a
   catalog row anchors, by ID or display alias, can link to a person, and only if the screen shows
   that person or shows nobody. Email misreads are tolerated with a 0.85 similarity threshold.
@@ -278,7 +297,7 @@ Code applies the review under rules that a manipulated answer cannot get around
   output), cost per purpose, per model and overall, per-request averages, and pricing. Answers
   replayed from the cache are counted at the cost of the call that originally produced them, so
   the totals cover everything behind `output.csv`.
-- **Tests** (`code/tests/`, 21, offline) cover:
+- **Tests** (`code/tests/`, 25, offline) cover:
   - policy decisions and step ordering;
   - intent rules;
   - six log layouts;
@@ -287,16 +306,19 @@ Code applies the review under rules that a manipulated answer cannot get around
   - the claim fallback when nothing is established;
   - information-time linking, and plan-only checks for retained records;
   - categories taken from the most specific observation;
-  - client retries, caching, provider selection and pricing;
+  - batch recovery (sole-claimant assignment, ties left open, outcome matching for accounts only);
+  - review-queue ordering and de-duplication;
+  - client retries, caching, the per-run memo, parallel calls (order, de-duplication, in-flight
+    cap), the rate limiter, provider selection and pricing;
   - the usage-report join.
 
 ## Known limitations
 
 - **Recall has a ceiling.** Before any heuristics, 34 of the 152 expected finding/verification
-  steps in the samples (22%) had no identifier link in evidence available by `audit_at`. 13 sample
+  steps in the samples (22%) had no identifier link in evidence available by `audit_at`. 12 sample
   misses remain, all of them missing steps (no wrong or extra steps):
-  - 7 anonymized analytics records and 4 accounts, whose only trace is a workflow-batch row shared
-    with requests of the same reported status;
+  - 6 anonymized analytics records and 4 accounts, whose only trace is a workflow-batch row that
+    another request in the batch could own too;
   - 2 audit records that appear in no participant file.
 - **Accounts.** 148 of the 508 eval deletion cases have no account step.
   - In 138, the account sits in a workflow batch shared with requests of the same reported status,
@@ -305,6 +327,10 @@ Code applies the review under rules that a manipulated answer cannot get around
   - 10 have no account row at all.
   - 144 accounts come from workflow-batch recovery, which infers the pairing from workflow claims
     rather than proving it from evidence. Identifiers link 216.
+  - Every ambiguous or missing account is listed in `review_queue.csv` with its candidates.
+- **Analytics.** 20 anonymized analytics profiles in the eval set come from batch recovery (only
+  sole-claimant rows). 202 possible profiles stay open in the review queue; most of those requests
+  probably have no profile at all, which the data cannot show.
 - **case_63 is `INCOMPLETE` with no steps.** Its only candidate record (`marketing_001`) is
   claimed for the subject by the data catalog, but the screenshot shows a different person, so the
   claim is rejected. With nothing established, the workflow's NOT_STARTED claim decides the
@@ -316,8 +342,9 @@ Code applies the review under rules that a manipulated answer cannot get around
   518 cases. Its measured value is on non-English negations and injected instructions (custom
   cases) and on reading screenshots.
 - **Reproducing the exact output needs the local response cache, which `code.zip` does not
-  include.** A fresh run asks the model again (about $0.36 and 40 minutes, calls one at a time),
-  and its answers can differ where the model reads a screenshot or a request differently.
+  include.** A fresh run asks the model again (about $0.35 and an estimated 7 minutes with 8 calls
+  in flight), and its answers can differ where the model reads a screenshot or a request
+  differently.
 - **Interpretation choices the samples do not settle** are encoded as `AuditPolicy` flags or plain
   rules:
   - already-compliant records are verified in `INCOMPLETE` cases;
@@ -341,13 +368,13 @@ code/
 │   ├── activity.py             catalog links, activity checks, workflow batches
 │   ├── evidence/               one parser per format -> Observation / Coverage; store.py indexes them
 │   ├── screenshot_reader.py    vision transcription of screenshots
-│   ├── linking.py              linking, state at audit, absence proofs, account recovery
+│   ├── linking.py              linking, state at audit, absence proofs, batch recovery
 │   ├── intent.py               rule-based intent (fallback and hard stop)
 │   ├── adjudication.py         per-case model review and guarded merge
 │   ├── policy.py               deletion_rules.csv -> finding / remediation / verification
-│   ├── steps.py, output.py     ordered steps, CSV writing and validation
-│   ├── pipeline.py             per-case orchestration and isolation
-│   ├── llm_client.py           providers, response cache, retries, usage log, run record
+│   ├── steps.py, output.py     ordered steps, CSV writing and validation, review queue
+│   ├── pipeline.py             review prefetch, per-case orchestration and isolation, review items
+│   ├── llm_client.py           providers, cache, memo, retries, thread pool + rate limit, usage log, run record
 │   └── prompts/                adjudication.md, screenshot.md
 ├── evaluation/
 │   ├── main.py, scoring.py     sample + custom-case evaluation
@@ -355,7 +382,7 @@ code/
 │   ├── usage_summary.py        builds usage_report.md
 │   ├── evaluation_report.md
 │   └── usage_report.md
-└── tests/                      21 offline unit tests
+└── tests/                      25 offline unit tests
 ```
 
 ## Packaging `code.zip`

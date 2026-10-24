@@ -1,10 +1,11 @@
 # Evaluation report
 
-Status: the submitted `output.csv` comes from run `20261024T172602Z`, the full 518-case pass with
-DeepSeek model review (`deepseek-flash`, 2026-10-24), made after information-time linking and the
-most-specific-category rule. On the 32 samples the code-only and model paths score identically.
-On the 518 eval requests the model changed 1 case (section "Final full run"). Tokens and cost are
-in `usage_report.md`.
+Status: the submitted `output.csv` comes from run `20261024T181324Z`, the full 518-case pass with
+DeepSeek model review (`deepseek-flash`, 2026-10-24), made after analytics batch recovery and with
+parallel model calls. On the 32 samples the code-only and model paths score identically. On the
+518 eval requests the model changed 1 case (section "Final full run"). Tokens and cost are in
+`usage_report.md`; `review_queue.csv` lists the calls the evidence could not settle (section
+"Review queue").
 
 ## How to reproduce
 
@@ -13,7 +14,7 @@ python3 code/main.py                            # full run (518 requests) -> out
 python3 code/evaluation/usage_summary.py --write  # usage_report.md from the latest full-run record
 python3 code/evaluation/main.py                 # samples + custom cases, saves .cache/eval/<run>.json
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # single-flag ablation
-python3 -m pytest -q code/tests                 # 21 unit tests
+python3 -m pytest -q code/tests                 # 25 unit tests
 ```
 
 ## Metrics
@@ -31,18 +32,18 @@ python3 -m pytest -q code/tests                 # 21 unit tests
 | Metric | Value |
 |---|---|
 | Status accuracy | 1.000 (32/32) |
-| Step precision / recall / F1 | 1.000 / 0.933 / 0.965 |
-| Step F1 including evidence_id | 0.965 |
+| Step precision / recall / F1 | 1.000 / 0.938 / 0.968 |
+| Step F1 including evidence_id | 0.968 |
 | Field accuracy (operation / state / evidence) | 1.000 / 1.000 / 1.000 |
-| Resource recall | 0.883 |
+| Resource recall | 0.892 |
 | Sequence accuracy | 0.656 (21/32) |
 | Contract violations | 0 |
 
-All 13 remaining misses are missing steps (no wrong or extra steps):
+All 12 remaining misses are missing steps (no wrong or extra steps):
 
 | Missing step | Count | Why |
 |---|---|---|
-| VERIFY_RECORD_ANONYMIZED | 7 | Anonymized analytics records carry no identifier anywhere. Their only trace is an ANONYMIZE_RECORD row in a workflow batch shared with requests of the same reported status. |
+| VERIFY_RECORD_ANONYMIZED | 6 | Anonymized analytics records carry no identifier anywhere. Their only trace is an ANONYMIZE_RECORD row in a workflow batch where another claimant could own it too (iteration `analytics-batch-recovery` assigns the profiles whose row has a single claimant left: case_04's). |
 | VERIFY_RECORD_ABSENT (account) | 4 | The account is named only in such a shared batch (case_23, case_28/29), or never named at all (`account_004`). |
 | VERIFY_RECORD_PRESENT | 2 | Audit records absent from every participant file (`audit_record_6645`, `audit_record_5569`). |
 
@@ -55,11 +56,11 @@ samples had no identifier link in evidence available by `audit_at`.
 
 ## Model review with DeepSeek (`deepseek-flash`, 2026-10-24)
 
-Before -> after (code-only -> code + model review):
+Before -> after (code-only -> code + model review), re-measured with the final code:
 
 | Set | Status | Step F1 | Sequence | Note |
 |---|---|---|---|---|
-| 32 samples | 1.000 -> 1.000 | 0.945 -> 0.945 | 0.562 -> 0.562 | model changed 0 of 32 outputs; it read all 32 as deletion requests |
+| 32 samples | 1.000 -> 1.000 | 0.968 -> 0.968 | 0.656 -> 0.656 | model changed 0 of 32 outputs; it read all 32 as deletion requests |
 | 4 custom | 0.750 -> 1.000 | 0.968 -> 0.968 | 0.500 -> 0.750 | custom_01 (Spanish "No quiero eliminar mi cuenta") now NOT_APPLICABLE; custom_02 injection flagged and ignored |
 
 What the model said on the 36 eval-harness cases: 85 records "belongs: yes", 15 "uncertain" (all
@@ -85,24 +86,29 @@ about $0.26 off-peak ($0.53 peak) and ~35 minutes sequentially.
 
 ## Final full run (518 eval requests, DeepSeek review)
 
-`python3 code/main.py`, 2026-10-24 17:26-17:27 UTC (1.1 min, one call at a time), run record
-`20261024T172602Z`:
-- It used 529 model answers (518 case reviews and 11 screenshot transcripts): 14 made during the
-  run and 515 replayed from earlier runs, 0 failed.
+`python3 code/main.py`, 2026-10-24 18:13:24-18:13:43 UTC (19 s, up to 8 calls in flight), run
+record `20261024T181324Z`:
+- It used 529 model answers (518 case reviews and 11 screenshot transcripts): 20 made during the
+  run (the 20 cases whose dossier gained a recovered analytics profile) and 509 replayed from
+  earlier runs, 0 failed.
 - No case fell back to the deterministic result, and none raised an error.
-- Everything behind the file cost $0.353 for 531 billed calls, all off-peak.
-- Earlier runs made the rest. The first live run (15:26-16:02 UTC, 36 min) made 506 answers for
-  $0.29, against a projection of $0.26. The information-time run (17:06-17:20 UTC) made 152 more;
-  one of them needed the corrective retry after a malformed JSON reply.
+- Everything behind the file cost $0.352 for 530 billed calls (one screenshot read needed the
+  corrective retry), all off-peak: $0.00068 and 3,271 tokens per request.
+- Earlier runs made the rest. The first live run (15:26-16:02 UTC, 36 min, one call at a time)
+  made 506 answers for $0.29, against a projection of $0.26. The information-time run (17:06-17:20
+  UTC) made 152 more; one of them needed the corrective retry after a malformed JSON reply.
 
-Details in `usage_report.md`.
+Details in `usage_report.md`. The previous submitted file (run `20261024T172602Z`) is kept as the
+local checkpoint `submission-checkpoint-1`; against it, 20 cases changed, each gaining one
+evidence-cited VERIFY_RECORD_ANONYMIZED step (iteration `analytics-batch-recovery`), with no status
+flips and no step removed. Total steps rose from 2,977 to 2,997.
 
 Validation of `output.csv`:
 
 | Check | Result |
 |---|---|
 | Contract (`validate_file`: header, 518 rows, order, 7-key steps, phase order, operation/state pairs, where evidence may be cited) | 0 violations |
-| Every cited `evidence_id` exists (manifest, activity or audit log) and is dated at or before its case's `audit_at` | 1,082 citations, 0 problems |
+| Every cited `evidence_id` exists (manifest, activity or audit log) and is dated at or before its case's `audit_at` | 1,102 citations, 0 problems |
 | Row order equals `deletion_requests.csv` | yes |
 | Deletion cases with no steps | 1 (case_63: INCOMPLETE, nothing established) |
 
@@ -123,7 +129,7 @@ current rules):
 | | Code only | Code + model review |
 |---|---|---|
 | COMPLETE / INCOMPLETE / NOT_APPLICABLE | 153 / 355 / 10 | 153 / 355 / 10 |
-| Steps in `output.csv` | 2,974 | 2,977 |
+| Steps in `output.csv` | 2,994 | 2,997 |
 | Cases whose output differs | | 1 of 518 (case_34) |
 
 case_34 (user_11) gains REPORT_REMAINING_RECORD `support_9538` (evidence_04), DELETE_RECORD and
@@ -171,6 +177,44 @@ case_63 (decided 2026-10-24):
 Expected effect on the hidden score, modeled over three possible true answers: +0.135 points of
 status accuracy, and no change to step metrics or sequence accuracy.
 
+## Parallel model calls (2026-10-24)
+
+The reviews are independent, so `AuditPipeline` builds every dossier first and sends them through
+`LLMClient.complete_many`: a thread pool with `LLM_MAX_CONCURRENCY` calls in flight (default 8)
+and call starts spaced to `LLM_CALLS_PER_SECOND` (default 4). The per-case pass then reads each
+answer from a per-run memo, single-threaded and in case order, so the output cannot depend on
+which call finishes first. Screenshots are read through the same pool.
+
+Measured on the 32 samples with an empty cache (both runs made 43 live calls: 11 screenshot reads,
+32 reviews):
+
+| | Start-up (screenshot reads) | 32 cases | Total | Model time | Cost |
+|---|---|---|---|---|---|
+| One call at a time | 116.8 s | 150.1 s | 266.9 s | 258.9 s | $0.0294 |
+| 8 in flight, 4 starts/s | 36.0 s | 27.2 s | 63.2 s | 262.5 s | $0.0288 |
+
+4.2x faster overall (5.5x on the cases), for the same calls and cost. Start-up gains less because
+it waits for the slowest single screenshot read. A cold 518-case run, which took 36 minutes one
+call at a time, should take about 7 minutes (estimate from this A/B; not measured). With the cache
+warm, the full run finishes in about 20 s.
+
+## Review queue (2026-10-24)
+
+`main.py` writes `review_queue.csv` next to `output.csv`: one row per case and reason, for a
+person to check. It never changes `output.csv`. For the final run, 351 items in 271 cases:
+
+| Priority | Reason | Items | Meaning |
+|---|---|---|---|
+| 1 | STATUS_FROM_CLAIM | 1 | case_63: nothing established, so the workflow's NOT_STARTED claim decided |
+| 2 | AMBIGUOUS_ACCOUNT | 138 | the account is one of 2-5 batch rows nothing tells apart (94 rows have 2 candidates); the row names the candidates and the batch-mates competing for them |
+| 2 | ACCOUNT_NOT_FOUND | 10 | no evidence and no batch row names the subject's account |
+| 3 | AMBIGUOUS_ANALYTICS | 202 | an anonymized analytics profile in the batch may be the subject's (most requests have none) |
+
+The model-driven reasons (doubted or dropped soft links, rules and model disagreeing on intent,
+injection, model unavailable) and the error reasons (case error, unresolved subject) are all zero
+on this data, matching the model's measured effect above. Before the queue existed, these calls
+were only free-text notes on each `CaseResult`.
+
 ## Iteration log (samples)
 
 | Run | Change | Status | P | R | F1 | Seq | Kept? |
@@ -184,20 +228,25 @@ status accuracy, and no change to step metrics or sequence accuracy.
 | claim-fallback | no record established for the subject -> the workflow's claim decides (COMPLETE stands, otherwise INCOMPLETE) | unchanged | | | | | kept: eval case_63 COMPLETE -> INCOMPLETE. The generic "no evidence-backed step -> INCOMPLETE" rule was rejected: it flips sample case_04 (status 1.000 -> 0.969) |
 | info-time-identity | Identity links by the information's own timestamp: a 09-09 snapshot inside a bundle exported 09-17 counts, while state and citations still need files captured by audit_at. Linked retained records with no in-window state are verified in INCOMPLETE plans. | 1.000 | 1.000 | 0.933 | 0.965 | 0.656 | kept: 0 wrong sample steps. Eval: 105 cases gain steps; accounts missing 172 -> 148 |
 | specific-category | A record's category comes from its most specific observation: a stated type, then a collection- or event-derived one (`ticket_attachments`, attachment scans), then the system default. | 1.000 | 1.000 | 0.933 | 0.965 | 0.656 | kept: samples unchanged. Eval: 8 support records REDACT -> DELETE, 2 of them beyond what the model had caught (case_71, case_119) |
+| analytics-batch-recovery | The account elimination, generalized (`BatchRecovery`), also runs on ANONYMIZE_RECORD rows for anonymized analytics profiles, without outcome matching (NOT_STARTED runs still anonymize: 3 of the 7 sample profiles with a batch row). Assigned only when a single claimant is left for the row. | 1.000 | 1.000 | 0.938 | 0.968 | 0.656 | kept: +1 right sample step (case_04), 0 wrong. Eval: 20 cases gain one evidence-cited VERIFY_RECORD_ANONYMIZED each; no status flips, no steps removed. All 21 assignments (eval + sample) have no rival claimant. |
+| account-holdout (check, no change) | Precision of account batch recovery on all 540 requests without labels: hide each account that identifiers already link and that has a batch row (185), treat it as anonymous, re-run the elimination. | | | | | | 141 returned to their own request, 44 abstentions, 0 given to a wrong request. The same check cannot test analytics: no identifier-linked profile has a batch row. |
+| parallel-calls (no output change) | Model reviews are prefetched on a thread pool (8 in flight, at most 4 starts/s); the per-case pass reads answers from a per-run memo in case order. | unchanged | | | | | kept: output identical; replay makes 0 new calls. Cold-cache wall time in section "Parallel model calls". |
+| review-queue (no output change) | `review_queue.csv` lists the calls the evidence could not settle safely, with a priority and the competing batch-mates. | unchanged | | | | | kept: see section "Review queue". |
 
 ## Ablations (one flag off, samples; code-only, against the current defaults)
 
 | Flag turned off | P | F1 | Seq | Reading |
 |---|---|---|---|---|
-| none (current) | 1.000 | 0.965 | 0.656 | |
-| `link_by_information_time` | 1.000 | 0.945 | 0.562 | Identity from snapshots inside later exports. It recovers 2 accounts directly, and the retained-record plan depends on it. |
-| `verify_retained_without_state` | 1.000 | 0.951 | 0.562 | Linked audit records with no in-window observation: 5 steps and 3 exact cases. |
-| `recover_accounts_from_activity` | 1.000 | 0.925 | 0.375 | Batch recovery is still the largest single lever. |
-| `match_workflow_outcome` | 1.000 | 0.942 | 0.562 | Outcome agreement resolves sample accounts that elimination alone cannot. |
-| `state_window_starts_at_request` | 0.947 | 0.940 | 0.500 | Precision drops, because pre-request evidence shows the pre-deletion state. |
-| `verify_compliant_records_when_incomplete` | 1.000 | 0.965 | 0.656 | No sample exercises it; custom_03 F1 drops from 0.968 to 0.857. |
-| `category_from_most_specific_observation` | 1.000 | 0.965 | 0.656 | No sample exercises it. On the eval set it changes 8 support records from REDACT to DELETE (attachments by their own rows or traces). |
-| `follow_claim_when_nothing_established` | 1.000 | 0.965 | 0.656 | No sample exercises it (case_04's claim is COMPLETE either way). On the eval set it changes only case_63. |
+| none (current) | 1.000 | 0.968 | 0.656 | |
+| `recover_analytics_from_activity` | 1.000 | 0.965 | 0.656 | One sample profile (case_04); 20 eval steps. |
+| `link_by_information_time` | 1.000 | 0.948 | 0.562 | Identity from snapshots inside later exports. It recovers 2 accounts directly, and the retained-record plan depends on it. |
+| `verify_retained_without_state` | 1.000 | 0.954 | 0.562 | Linked audit records with no in-window observation: 5 steps and 3 exact cases. |
+| `recover_accounts_from_activity` | 1.000 | 0.928 | 0.375 | Account batch recovery is still the largest single lever. |
+| `match_workflow_outcome` | 1.000 | 0.945 | 0.562 | Outcome agreement resolves sample accounts that elimination alone cannot. |
+| `state_window_starts_at_request` | 0.948 | 0.943 | 0.500 | Precision drops, because pre-request evidence shows the pre-deletion state (custom F1 0.968 -> 0.938 too). |
+| `verify_compliant_records_when_incomplete` | 1.000 | 0.968 | 0.656 | No sample exercises it; custom_03 F1 drops from 0.968 to 0.857. |
+| `category_from_most_specific_observation` | 1.000 | 0.968 | 0.656 | No sample exercises it. On the eval set it changes 8 support records from REDACT to DELETE (attachments by their own rows or traces). |
+| `follow_claim_when_nothing_established` | 1.000 | 0.968 | 0.656 | No sample exercises it (case_04's claim is COMPLETE either way). On the eval set it changes only case_63. |
 
 ## Custom evaluation cases
 
@@ -256,3 +305,17 @@ Defined in `code/evaluation/custom_cases.py` (real users and evidence, one input
     -> A record's category now comes from its most specific observation
     (`category_from_most_specific_observation`, unit test). All 8 are deterministic in code, and the
     model's only remaining output effect is case_34's screenshot-derived state.
+12. Anonymized analytics profiles were never reported, because they name no one: the worker's
+    ANONYMIZE_RECORD row is their only trace. -> The account elimination was generalized
+    (`BatchRecovery`) and runs on those rows too, without outcome matching (NOT_STARTED runs still
+    anonymize). Samples: recall 0.933 -> 0.938, F1 0.965 -> 0.968, 0 wrong. Eval: 20 cases gain a
+    step (unit test). A label-free holdout on accounts (hide each identifier-linked account and
+    re-run the elimination) returned 141 to their own request, abstained on 44 and gave 0 to a
+    wrong request.
+13. A cold run took 36 minutes because model calls ran one at a time -> reviews are prefetched on a
+    rate-limited thread pool while decisions stay single-threaded: 4.2x faster on a cold sample run
+    for the same cost (3 unit tests: memo semantics, parallel order and de-duplication with the
+    in-flight cap, rate limiter).
+14. "Kept for review" notes and ambiguous batches went nowhere a person would see them -> each case
+    records typed review items, and `review_queue.csv` lists them with a priority and the competing
+    batch-mates (unit test).
