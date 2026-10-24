@@ -21,7 +21,7 @@ from .domain import Category, CaseResult, DeletionRequest, DeletionStatus, Requi
 from .evidence.store import EvidenceStore
 from .identity import IdentityIndex
 from .intent import IntentResult, classify_intent
-from .linking import AccountRecovery, CaseLinker, ResourceView
+from .linking import BatchRecovery, CaseLinker, Recovery, ResourceView
 from .llm_client import LLMClient
 from .policy import Decision, decide
 from .screenshot_reader import read_screenshots
@@ -61,20 +61,23 @@ class AuditPipeline:
         # Batch membership needs every known request (inputs only), not just the ones being audited.
         self._all_requests = [r for name in ("deletion_requests.csv", "sample_deletion_requests.csv")
                               if (dataset_root / name).exists() for r in load_requests(dataset_root / name)]
-        self._recovered: dict[str, str] | None = None
+        self._recoveries: dict[str, Recovery] | None = None
 
-    def _recovered_accounts(self) -> dict[str, str]:
-        if self._recovered is None:
-            self._recovered = {}
+    def _recovered(self) -> dict[str, Recovery]:
+        """system_id -> records recovered from workflow batches, computed once over every request."""
+        if self._recoveries is None:
+            recoveries = []
             if self.policy.recover_accounts_from_activity:
-                pairs = []
-                for request in self._all_requests:
-                    subject = self.identities.resolve(request.email)
-                    if subject and classify_intent(request.request_text).is_deletion:
-                        pairs.append((request, subject))
-                self._recovered = AccountRecovery(self.linker, self.batches,
-                                                  self.policy.match_workflow_outcome).assign(pairs)
-        return self._recovered
+                recoveries.append(BatchRecovery.accounts(self.linker, self.batches, self.policy.match_workflow_outcome))
+            if self.policy.recover_analytics_from_activity:
+                recoveries.append(BatchRecovery.analytics(self.linker, self.batches))
+            pairs = []
+            for request in self._all_requests if recoveries else []:
+                subject = self.identities.resolve(request.email)
+                if subject and classify_intent(request.request_text).is_deletion:
+                    pairs.append((request, subject))
+            self._recoveries = {recovery.system_id: recovery.assign(pairs) for recovery in recoveries}
+        return self._recoveries
 
     def _decide(self, views: list[ResourceView]) -> list[Decision]:
         return [d for d in (decide(v, self.dataset.rules) for v in views) if d is not None]
@@ -99,7 +102,8 @@ class AuditPipeline:
         ctx = CaseContext(request=request, intent=classify_intent(request.request_text))
         ctx.subject = self.identities.resolve(request.email)
         if ctx.subject is not None:
-            ctx.views = self.linker.resources(request, ctx.subject, self._recovered_accounts())
+            assigned = {system_id: recovery.assigned for system_id, recovery in self._recovered().items()}
+            ctx.views = self.linker.resources(request, ctx.subject, assigned)
             ctx.decisions = self._decide(ctx.views)
         if self.adjudicator is not None and ctx.subject is not None:
             review = self.adjudicator.review(request, self._subject_keys(ctx.subject), ctx.views,

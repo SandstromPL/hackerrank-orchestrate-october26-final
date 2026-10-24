@@ -24,6 +24,10 @@ class AuditPolicy:
     verify_compliant_records_when_incomplete: bool = True
     # Use deletion-worker activity batches to recover account IDs that no evidence links.
     recover_accounts_from_activity: bool = True
+    # The same elimination for anonymized analytics profiles, whose only trace is the worker's
+    # ANONYMIZE_RECORD row (they carry no identifier). Assigned only when the request is the sole
+    # claimant left for the row; the run's reported outcome is not matched (see BatchRecovery.analytics).
+    recover_analytics_from_activity: bool = True
     # When pairing batch rows with requests, require the account step's reported result to agree
     # with the request's reported_status (COMPLETE<->SUCCESS, NOT_STARTED<->FAILED, ...).
     match_workflow_outcome: bool = True

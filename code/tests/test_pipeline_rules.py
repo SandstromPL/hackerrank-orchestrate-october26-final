@@ -10,13 +10,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from deletion_audit.activity import WorkflowBatches  # noqa: E402
 from deletion_audit.adjudication import AdjudicationOut, CaseAdjudicator  # noqa: E402
 from deletion_audit.dataset import Rule  # noqa: E402
-from deletion_audit.domain import Category, DeletionRequest, DeletionStatus, Observation, Operation, RequiredAction  # noqa: E402
+from deletion_audit.domain import (ActivityEvent, Category, DeletionRequest, DeletionStatus, Observation,  # noqa: E402
+                                   Operation, RequiredAction, Subject)
 from deletion_audit.evidence.log_traces import parse_line  # noqa: E402
 from deletion_audit.evidence.store import available  # noqa: E402
 from deletion_audit.intent import classify_intent  # noqa: E402
-from deletion_audit.linking import ResourceView, most_specific_category  # noqa: E402
+from deletion_audit.linking import BatchRecovery, ResourceView, most_specific_category  # noqa: E402
 from deletion_audit.output import validate_row  # noqa: E402
 from deletion_audit.policy import decide  # noqa: E402
 from deletion_audit.steps import build_steps, serialize, status_for  # noqa: E402
@@ -130,6 +132,41 @@ def test_retained_record_without_state_is_planned_only_in_incomplete_cases():
     assert build_steps([planned], DeletionStatus.COMPLETE) == []  # nothing to cite, so never in a COMPLETE case
     assert status_for([planned], "NOT_STARTED") == DeletionStatus.INCOMPLETE  # a plan-only check establishes nothing
     assert status_for([planned]) == DeletionStatus.COMPLETE
+
+
+def test_batch_recovery_assigns_only_rows_left_to_a_single_claimant():
+    class Linker:  # identifier links: user_b's analytics profile is known, nobody else's records are
+        def linked_resources(self, subject, cutoff):
+            return {"analytics_b": ("identifier", set())} if subject.user_id == "user_b" else {}
+
+        def state_of(self, resource_id, request):
+            return object()
+
+        def owners_of(self, resource_id, cutoff):
+            return {"user_b"} if resource_id == "analytics_b" else set()
+
+    later = T0 + timedelta(days=1)
+    row = lambda n, at, event, system, rid, result: ActivityEvent(f"activity_{n}", at - timedelta(minutes=30 - n),
+                                                                  event, "deletion_worker", system, rid, result, "")
+    batches = WorkflowBatches([
+        row(1, T0, "ANONYMIZE_RECORD", "analytics_platform", "analytics_a", "SUCCESS"),
+        row(2, T0, "ANONYMIZE_RECORD", "analytics_platform", "analytics_b", "SUCCESS"),
+        row(3, T0, "DELETE_RECORD", "analytics_platform", "analytics_z", "SUCCESS"),  # not an anonymization
+        row(4, T0, "DELETE_RECORD", "account_service", "account_a", "SUCCESS"),
+        row(5, later, "ANONYMIZE_RECORD", "analytics_platform", "analytics_c", "SUCCESS"),
+    ])
+    subject = lambda user: Subject(user, user, frozenset(), frozenset(), frozenset())
+    pairs = [(DeletionRequest(case, "x@y.z", T0, status, at, at, "delete"), subject(user)) for case, user, status, at in [
+        ("case_a", "user_a", "NOT_STARTED", T0), ("case_b", "user_b", "COMPLETE", T0),
+        ("case_c", "user_c", "COMPLETE", later), ("case_d", "user_d", "COMPLETE", later)]]
+    analytics = BatchRecovery.analytics(Linker(), batches).assign(pairs)
+    # case_b's profile is linked, so it is no claimant and its row is taken; case_a keeps the other row
+    # even though its run reported NOT_STARTED. case_c and case_d tie over one row: no guess.
+    assert analytics.assigned == {"case_a": "analytics_a"}
+    assert analytics.unresolved == {"case_c": {"analytics_c"}, "case_d": {"analytics_c"}}
+    accounts = BatchRecovery.accounts(Linker(), batches).assign(pairs)
+    assert accounts.assigned == {"case_b": "account_a"}  # case_a (NOT_STARTED) cannot own a SUCCESS account row
+    assert accounts.unresolved["case_a"] == frozenset() and "case_b" not in accounts.unresolved
 
 
 def test_category_comes_from_the_most_specific_observation():

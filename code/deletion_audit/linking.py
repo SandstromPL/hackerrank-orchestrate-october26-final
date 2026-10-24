@@ -120,7 +120,7 @@ class CaseLinker:
         return ResourceView(system_id, resource_id, category, state, basis, tuple(sorted(units)), proof)
 
     def resources(self, request: DeletionRequest, subject: Subject,
-                  recovered_accounts: dict[str, str] | None = None) -> list[ResourceView]:
+                  recovered: dict[str, dict[str, str]] | None = None) -> list[ResourceView]:
         views = [self.view(request, rid, basis, units)
                  for rid, (basis, units) in sorted(self.linked_resources(subject, request.audit_at).items())]
         # A record seen only before the request (e.g. an account deleted in an earlier case) has no
@@ -133,19 +133,30 @@ class CaseLinker:
         retained = [v for v in views if v.state is None and v.link_basis == "identifier"
                     and v.category in self._retained] if self._policy.verify_retained_without_state else []
         views = live + retained + ([] if has_live_account else stale_accounts[:1])
-        recovered = (recovered_accounts or {}).get(request.case_id)
-        if recovered and not any(v.system_id == "account_service" for v in views):
-            views.append(self.view(request, recovered, "activity_batch", set()))
+        # Records recovered from workflow batches (system_id -> case_id -> resource_id) fill a gap only.
+        for system_id, assignments in sorted((recovered or {}).items()):
+            resource_id = assignments.get(request.case_id)
+            if resource_id and not any(v.system_id == system_id for v in views):
+                views.append(self.view(request, resource_id, "activity_batch", set()))
         return views
 
 
-class AccountRecovery:
-    """Recover account IDs that no evidence ties to a person, from workflow batches.
+@dataclass(frozen=True)
+class Recovery:
+    assigned: dict[str, str]  # case_id -> the one resource elimination left it
+    unresolved: dict[str, frozenset[str]]  # claimant case_id -> its remaining candidates (empty: none in its batch)
 
-    Every request sharing a `reported_at` is processed in one batch, so an account deleted in that
-    batch belongs to one of those requests. Accounts that evidence ties to someone else are
-    removed, then elimination runs like a sudoku: a request left with exactly one candidate (that
-    no other request also needs) takes it. Ambiguous batches stay unassigned rather than guessed.
+
+class BatchRecovery:
+    """Recover records that no evidence ties to a person, from workflow batches.
+
+    Every request sharing a `reported_at` is processed in one batch, so a record the deletion
+    worker treated in that batch belongs to one of those requests. A request that evidence already
+    links to a record of the system is not a claimant (a subject has one account and at most one
+    analytics profile; every sample agrees), and its record is taken. Records that evidence ties
+    to someone else are removed, then elimination runs like a sudoku: a request left with exactly
+    one candidate (that no other request also needs) takes it. Ambiguous batches stay unassigned
+    rather than guessed.
     """
 
     # The workflow's own claims must agree with each other: the run that reported COMPLETE for a
@@ -157,34 +168,55 @@ class AccountRecovery:
         "PARTIALLY_COMPLETE": {"PARTIAL", "SUCCESS"},
     }
 
-    def __init__(self, linker: CaseLinker, batches: WorkflowBatches, match_workflow_outcome: bool = True) -> None:
+    def __init__(self, linker: CaseLinker, batches: WorkflowBatches, system_id: str, *,
+                 event_type: str | None = None, require_live_state: bool = False,
+                 match_workflow_outcome: bool = False) -> None:
+        self.system_id = system_id
         self._linker = linker
         self._batches = batches
+        self._event_type = event_type  # None: every worker row aimed at the system
+        self._require_live_state = require_live_state  # a linked record counts only with an in-window state
         self._match_outcome = match_workflow_outcome
 
-    def _has_live_account(self, request: DeletionRequest, subject: Subject) -> set[str]:
+    @classmethod
+    def accounts(cls, linker: CaseLinker, batches: WorkflowBatches, match_workflow_outcome: bool = True) -> "BatchRecovery":
+        # An account seen only before the request may be a stale copy, so it does not make the
+        # request a non-claimant. Holding out each of the 185 accounts that identifiers link (and
+        # that have a batch row), elimination returns 141 to their own request, abstains on 44 and
+        # gives none to the wrong one.
+        return cls(linker, batches, "account_service", require_live_state=True,
+                   match_workflow_outcome=match_workflow_outcome)
+
+    @classmethod
+    def analytics(cls, linker: CaseLinker, batches: WorkflowBatches) -> "BatchRecovery":
+        # An anonymized analytics profile names no one, so its ANONYMIZE_RECORD row is its only
+        # trace. The worker anonymizes it even in runs that report NOT_STARTED (3 of the 7 sample
+        # profiles with a batch row), so the run's outcome says nothing here and is not matched.
+        return cls(linker, batches, "analytics_platform", event_type="ANONYMIZE_RECORD")
+
+    def _linked(self, request: DeletionRequest, subject: Subject) -> set[str]:
         linked = self._linker.linked_resources(subject, request.audit_at)
-        return {rid for rid in linked
-                if system_for(rid) == "account_service" and self._linker.state_of(rid, request) is not None}
+        return {rid for rid in linked if system_for(rid) == self.system_id
+                and (not self._require_live_state or self._linker.state_of(rid, request) is not None)}
 
     def _options(self, request: DeletionRequest, subject: Subject, taken: set[str]) -> set[str]:
         options = set()
-        for row in self._batches.rows_for(request.reported_at, "account_service"):
-            if row.resource_id in taken:
+        allowed = self.OUTCOME_COMPATIBLE.get(request.reported_status) if self._match_outcome else None
+        for row in self._batches.rows_for(request.reported_at, self.system_id):
+            if row.resource_id in taken or (self._event_type and row.event_type != self._event_type):
                 continue
             if self._linker.owners_of(row.resource_id, request.audit_at) - {subject.user_id}:
                 continue
-            allowed = self.OUTCOME_COMPATIBLE.get(request.reported_status)
-            if self._match_outcome and allowed and row.reported_result not in allowed:
+            if allowed and row.reported_result not in allowed:
                 continue
             options.add(row.resource_id)
         return options
 
-    def assign(self, requests: list[tuple[DeletionRequest, Subject]]) -> dict[str, str]:
+    def assign(self, requests: list[tuple[DeletionRequest, Subject]]) -> Recovery:
         taken: set[str] = set()
         claimants: dict[str, tuple[DeletionRequest, Subject]] = {}
         for request, subject in requests:
-            explicit = self._has_live_account(request, subject)
+            explicit = self._linked(request, subject)
             taken |= explicit
             if not explicit:
                 claimants[request.case_id] = (request, subject)
@@ -196,13 +228,13 @@ class AccountRecovery:
             changed = False
             singles = {case_id: next(iter(opts)) for case_id, opts in options.items() if len(opts) == 1}
             demand: dict[str, int] = defaultdict(int)
-            for account in singles.values():
-                demand[account] += 1
-            for case_id, account in sorted(singles.items()):
-                if demand[account] == 1 and case_id in options:
-                    assigned[case_id] = account
+            for resource_id in singles.values():
+                demand[resource_id] += 1
+            for case_id, resource_id in sorted(singles.items()):
+                if demand[resource_id] == 1 and case_id in options:
+                    assigned[case_id] = resource_id
                     del options[case_id]
                     for other in options.values():
-                        other.discard(account)
+                        other.discard(resource_id)
                     changed = True
-        return assigned
+        return Recovery(assigned, {case_id: frozenset(opts) for case_id, opts in options.items()})
