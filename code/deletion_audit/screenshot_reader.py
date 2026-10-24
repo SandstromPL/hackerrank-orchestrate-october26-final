@@ -78,7 +78,7 @@ def read_screenshots(client: LLMClient, dataset: Dataset) -> dict[str, list[dict
                                      f"{evidence.captured_at.isoformat()}. Transcribe its records."},
         ]
         raw = client.complete_json(purpose="screenshot", version=PROMPT_VERSION, system=system, content=content,
-                                   schema=SCHEMA)
+                                   schema=SCHEMA, validate=ScreenTranscript.model_validate)
         if raw is None:
             continue
         try:

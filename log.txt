@@ -41,3 +41,87 @@ repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
 
+## [2026-10-24T19:21:40+05:30] Build option C: normalizer, eval harness, baseline, model adjudication
+
+User Prompt (verbatim, secrets redacted):
+Go with option C, the hybrid. Start with the evidence normalizer and the eval harness against the 32 samples, then add the per-case LLM adjudication.
+
+Agent Response Summary:
+Built the hybrid pipeline in code/deletion_audit: an evidence normalizer for all 94 files (SQL, JSON, 7 log layouts grouped into traces, TXT ledger, PDF text, screenshot OCR fallback) producing per-resource observations, then identity resolution, linking, state at audit_at, a rules-based policy engine and an ordered steps_json writer. Built code/evaluation (status, step P/R/F1, field, sequence metrics, error buckets, run deltas, policy ablations, 4 custom cases) and iterated: on the samples, status went 0.844->1.000 and step F1 0.831->0.945 (precision 1.000, sequence 0.344->0.562); a unit test also exposed an unparsed pipe-delimited log layout, which was fixed. Added the per-case model adjudication (intent, ownership of soft links, category refinement) plus a screenshot vision reader with disk cache and token/cost logging; after an automated security review flagged that injected text could make the model hide records, model vetoes now require deterministic backing and are ignored once injection is detected. The model path is unit-tested but not yet run because no API key is configured; output.csv currently holds the deterministic run (518 valid rows). Open decision for the user: keep or drop workflow-outcome agreement for account pairing (F1 0.945 with, 0.922 without).
+
+Actions:
+* Created code/deletion_audit/ (domain, config, dataset, identity, activity, linking, policy, steps, intent, pipeline, output, llm_client, adjudication, screenshot_reader, evidence/* parsers, prompts/*.md) and code/main.py
+* Created code/evaluation/ (main.py, scoring.py, custom_cases.py, usage_summary.py, evaluation_report.md) and code/tests/test_pipeline_rules.py (9 passing tests)
+* Created .venv (anthropic 2.3.0, pydantic, pypdf, pytest), .env.example; added .cache/ to .gitignore
+* Ran the eval harness 12+ times incl. 4 single-flag ablations; full 518-case runs; wrote output.csv (0 contract violations)
+* Commits d5610c3, 806feb3, e64efea on main
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T20:00:49+05:30] Research legitimate free LLM API tiers and impact on the pipeline
+
+User Prompt (verbatim, secrets redacted):
+hey look for free llm api keys. I dont have any paid version right now. And how will it affect ?
+
+Agent Response Summary:
+Interpreted the request as finding legitimate free tiers (declined to look for leaked or shared keys: provider ToS violation, revocation risk and disqualification risk). Checked official sources: Gemini's pricing page confirms free Flash/Flash-Lite tiers with image input (free-tier data used to improve Google products; per-project limits only visible in AI Studio), Groq's docs list text models at 30 RPM / 1K RPD / 8K TPM / 200K TPD with no vision, GitHub Models was retired on 2026-07-30, Cerebras now requires a payment method, OpenRouter free models are reported at 50 requests/day without a $10 purchase, and no HackerRank-provided credits were found. Local hardware (15 GB RAM, RTX 3050 Ti 4 GB) can run a 3-4B model via Ollama. Explained the impact: little change in output accuracy since deterministic code produces every step, but ~530 calls per full run exceeds most free quotas, so the plan is an OpenAI-compatible backend plus routing (model only for uncertain cases, batched intent checks, ~50-120 calls/run) with rate limiting and deterministic fallback; usage_report would show $0 actual plus list-price equivalent. Recommended Gemini Flash-Lite/Flash via a free AI Studio key, Groq as text-only backup, local Ollama as last resort; no code changed this turn.
+
+Actions:
+* WebSearch: Gemini, Groq, OpenRouter, GitHub Models, Mistral, Cerebras free tiers; HackerRank Orchestrate credits
+* WebFetch: console.groq.com/docs/rate-limits, ai.google.dev/gemini-api/docs/rate-limits, ai.google.dev/gemini-api/docs/pricing, docs.github.com GitHub Models page (retired notice)
+* Bash: checked CPU/RAM/GPU, Ollama (not installed), gh CLI status
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T20:05:42+05:30] Count model calls and tokens per evaluation run
+
+User Prompt (verbatim, secrets redacted):
+let me rewind, how much call will it take on each evaluation?
+
+Agent Response Summary:
+Counted model calls from the code paths: the current design makes 11 screenshot calls at pipeline start plus one adjudication call per case, so a cold eval run (32 samples + 4 custom) is 47 calls, a re-run with nothing changed is 0 (disk cache keyed on input hash), and a full 518-case run is 518 calls (+11 screenshots if not already cached). Built every real dossier locally without calling any API: input is ~1,950 tokens per adjudication call (system prompt ~1,036, schema ~306), about 70K input tokens per eval run and ~1.02M per full run. A routing rule (non-English text, no deletion wording, records known only from screenshots/PDFs, workflow action disagreeing with a default category) escalates 5 of 36 eval-harness cases and 87 of 518 full-run cases, so with batched intent checks and lazy screenshot reading an eval run drops to ~3 calls and a full run to ~58 calls (~120-150K tokens). No code changed.
+
+Actions:
+* grep of model call sites (screenshot_reader, adjudication, pipeline, evaluation/main.py)
+* Scratchpad script call_budget.py: built dossiers for 32 samples, 4 custom, 518 eval cases with the deterministic pipeline; measured token sizes and routing counts
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T20:18:39+05:30] Evaluate DeepSeek and explain the LLM's core use cases
+
+User Prompt (verbatim, secrets redacted):
+what about deekseek and tell main  core use cases of llm here?
+
+Agent Response Summary:
+Checked DeepSeek's official pricing page: deepseek-flash (V4.1-Flash) accepts images and supports JSON output at $0.15-0.30 per M input (cache hits $0.003-0.006) and $0.60-1.20 per M output, half price off-peak; deepseek-v4-pro has no image input; the page mentions no free balance for new users (third-party sites report a ~5M-token grant, unverified), and secondhand reports say strict json_schema may be unavailable (json_object works). Estimated cost on deepseek-flash: ~$0.05 per eval run and ~$0.3-0.5 per full 518-case run with the current one-call-per-case design, ~$0.05 per full run with routing. Explained the three model use cases in the pipeline: request intent (multilingual, negations, injection), screenshot transcription (11 PNGs), and record adjudication (ownership of soft links, category refinement), with everything exact left to deterministic code. Recommended DeepSeek flash if a ~$2 top-up is acceptable, otherwise Gemini's free tier with routing. No code changed.
+
+Actions:
+* WebSearch: DeepSeek pricing, signup credits, vision/JSON support
+* WebFetch: api-docs.deepseek.com/quick_start/pricing
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+

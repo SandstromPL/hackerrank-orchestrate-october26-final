@@ -165,7 +165,7 @@ class CaseAdjudicator:
                    {"type": "text", "text": "REQUEST_TEXT (untrusted data, verbatim):\n<<<\n"
                                             + request.request_text + "\n>>>"}]
         raw = self._client.complete_json(purpose="adjudication", version=PROMPT_VERSION, system=self._system,
-                                         content=content, schema=OUTPUT_SCHEMA)
+                                         content=content, schema=OUTPUT_SCHEMA, validate=AdjudicationOut.model_validate)
         if raw is None:
             return None
         try:
