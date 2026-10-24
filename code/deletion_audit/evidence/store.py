@@ -21,6 +21,12 @@ from .sql_snapshots import parse_sql_snapshot
 log = logging.getLogger(__name__)
 
 
+def available(observation: Observation, cutoff: datetime, by_information_time: bool = False) -> bool:
+    """Can this observation link a record by the cutoff? By default its file must be captured by
+    then; by information time, a snapshot taken by then counts even inside a later export."""
+    return (observation.observed_at if by_information_time else observation.captured_at) <= cutoff
+
+
 class EvidenceStore:
     def __init__(self, dataset: Dataset, cache_dir: Path, vision: dict[str, list[dict]] | None = None) -> None:
         self.catalog: list[CatalogLink] = catalog_links(dataset.activity)
@@ -63,11 +69,12 @@ class EvidenceStore:
     def observations(self, resource_id: str) -> list[Observation]:
         return self._by_resource.get(resource_id, [])
 
-    def linked(self, keys: frozenset[str], available_by: datetime) -> list[Observation]:
+    def linked(self, keys: frozenset[str], available_by: datetime,
+               by_information_time: bool = False) -> list[Observation]:
         """Observations whose unit mentions any key, from evidence available by the cutoff."""
         seen: dict[tuple[str, str], Observation] = {}
         for key in sorted(keys):
             for observation in self._by_key.get(key, []):
-                if observation.captured_at <= available_by:
+                if available(observation, available_by, by_information_time):
                     seen[(observation.unit_id, observation.resource_id)] = observation
         return list(seen.values())

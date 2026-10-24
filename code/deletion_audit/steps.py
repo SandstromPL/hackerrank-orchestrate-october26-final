@@ -14,10 +14,10 @@ def status_for(decisions: list[Decision], claimed_status: str | None = None) -> 
     """COMPLETE iff no record has a finding.
 
     `claimed_status` (the workflow's reported_status) is only a fallback for when no record's state
-    is established at all: a COMPLETE claim stands, any other claim means INCOMPLETE. Once any
-    record is established, the evidence alone decides.
+    is established at all (plan-only checks establish nothing): a COMPLETE claim stands, any other
+    claim means INCOMPLETE. Once any record is established, the evidence alone decides.
     """
-    if not decisions and claimed_status is not None:
+    if claimed_status is not None and not any(d.observed for d in decisions):
         return DeletionStatus.COMPLETE if claimed_status == DeletionStatus.COMPLETE.value else DeletionStatus.INCOMPLETE
     return DeletionStatus.INCOMPLETE if any(not d.compliant for d in decisions) else DeletionStatus.COMPLETE
 
@@ -33,7 +33,7 @@ def build_steps(decisions: list[Decision], status: DeletionStatus, *, verify_com
     for d in decisions:
         system, resource = d.view.system_id, d.view.resource_id
         if status == DeletionStatus.COMPLETE:
-            if d.view.evidence_id:
+            if d.observed and d.view.evidence_id:  # a plan-only check proves nothing about the current state
                 steps.add(Step(Phase.VERIFICATION, system, resource, d.verification, d.view.evidence_id))
             continue
         if d.finding:

@@ -32,6 +32,14 @@ class AuditPolicy:
     # with nothing linkable), NOT_STARTED / PARTIALLY_COMPLETE mean INCOMPLETE. Once any record is
     # established the claim is ignored.
     follow_claim_when_nothing_established: bool = True
+    # A record's owner may be read from information timed at or before audit_at even when the file
+    # carrying it was exported later (a 09-09 snapshot inside a bundle captured 09-17). State and
+    # citations still use only files captured by audit_at.
+    link_by_information_time: bool = True
+    # A retained record (audit log, legal hold) linked to the subject but not observed in the audit
+    # window is still policy-required, so INCOMPLETE plans verify it remains. A COMPLETE case never
+    # lists it, because there is no evidence to cite.
+    verify_retained_without_state: bool = True
 
 
 DEFAULT_POLICY = AuditPolicy()

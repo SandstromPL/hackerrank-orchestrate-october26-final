@@ -24,9 +24,9 @@ The challenge contract is in `problem_statement.md` and `AGENTS.md` in the chall
 
 | Set | Result |
 |---|---|
-| 32 public samples (scored against `sample_output.csv`) | status accuracy 1.000, step precision / recall / F1 1.000 / 0.896 / 0.945, sequence accuracy 0.562 (18/32), 0 contract violations |
+| 32 public samples (scored against `sample_output.csv`) | status accuracy 1.000, step precision / recall / F1 1.000 / 0.933 / 0.965, sequence accuracy 0.656 (21/32), 0 contract violations |
 | 4 hand-built cases (`code/evaluation/custom_cases.py`) | status accuracy 0.750 code-only, 1.000 with the model review |
-| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,855 steps, 0 contract violations, all 1,073 citations exist and predate `audit_at`. Model answers came from a 36-minute live run (530 billed calls, $0.315) and were replayed from the cache for the final file. |
+| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,977 steps, 0 contract violations, all 1,082 citations exist and predate `audit_at`. 529 model answers: 152 made in the final 14-minute run, the rest replayed from the response cache. Everything behind the file cost $0.357 (531 billed calls). |
 
 Details: [`code/evaluation/evaluation_report.md`](code/evaluation/evaluation_report.md) and
 [`code/evaluation/usage_report.md`](code/evaluation/usage_report.md).
@@ -88,11 +88,11 @@ python3 code/main.py --requests dataset/sample_deletion_requests.csv --output /t
 python3 code/evaluation/main.py                       # score samples + custom cases
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # one-flag ablation
 python3 code/evaluation/usage_summary.py --write      # usage_report.md from the latest full run
-python3 -m pytest -q code/tests                       # 18 unit tests, offline
+python3 -m pytest -q code/tests                       # 20 unit tests, offline
 ```
 
 A full run with the model makes one review call per case, one at a time. It logs progress every 50
-cases and takes about 36 minutes and $0.31 at DeepSeek off-peak prices. Answers replayed from the
+cases. From an empty cache it takes about 40 minutes and $0.36 at DeepSeek off-peak prices. Answers replayed from the
 local cache cost nothing and finish in seconds. `--no-llm` needs no network. Once Tesseract's
 text for the 11 screenshots is cached it runs in under a second; the first run also OCRs them.
 `main.py` validates the file it wrote and exits 1 on any contract violation.
@@ -142,7 +142,7 @@ stands.
 | Identity | `identity.py` | Maps the request email to a `user_id` through the current snapshot and the audit-log history. It resolves only when the email has exactly one owner. Subject keys are the `user_id` plus every current and historical email, email hash and phone (digits only). |
 | Evidence | `evidence/*.py`, `screenshot_reader.py` | Turns every file into `Observation` records (resource, system, category, exists, direct identifiers, user references, link keys, enabled / restore flags). Snapshots also produce `Coverage` records, which prove absence. Parsers: SQL (executed in in-memory SQLite, replicas included), JSON (bundles, exports, collection dumps, ledgers), logs (seven layouts grouped into traces), the TXT handover, PDFs (text layer via `pypdf`), screenshots (model transcript plus Tesseract backstop). Each file is parsed in isolation, so one bad file cannot stop the run. |
 | Activity | `activity.py` | Extracts the few activity rows that carry facts: data-catalog `LINK_RESOURCE_IDENTITY` rows, point-in-time `CHECK_*` rows, workflow batches (requests that share a `reported_at`), and the operation the workflow requested for each resource (context for the model). |
-| Linking + state | `linking.py` | Links records to the subject's keys using evidence captured by `audit_at`, and takes each record's state from observations inside [`requested_at`, `audit_at`]. Also recovers accounts from workflow batches (below). |
+| Linking + state | `linking.py` | Links records to the subject's keys using information timed at or before `audit_at`, even a snapshot inside a file exported later. Takes each record's state from observations inside [`requested_at`, `audit_at`] in files captured by `audit_at`. Also recovers accounts from workflow batches (below). |
 | Intent | `intent.py` | Rule-based classifier: the fallback when no model is configured, and the hard stop for explicit "not asking for deletion" wording. |
 | Model review | `adjudication.py`, `prompts/adjudication.md` | One structured call per case, merged under guardrails (next section). |
 | Policy | `policy.py` | The only place that maps (category, state) to operations, per `deletion_rules.csv`. |
@@ -195,11 +195,19 @@ Code applies the review under rules that a manipulated answer cannot get around
   the status: COMPLETE stands, and NOT_STARTED or PARTIALLY_COMPLETE give `INCOMPLETE` with no
   steps. Sample case_04 (nothing linkable, claimed COMPLETE) is truly COMPLETE. A stricter rule,
   "no proof means INCOMPLETE", would get it wrong.
-- **Linking and state use different windows.** Identity is stable, so any evidence captured by
-  `audit_at` can link a record. State comes only from observations made between `requested_at` and
-  `audit_at`, because earlier evidence shows the pre-deletion state. A record seen only before the
-  request produces no step. The one exception is an account with an absence proof, kept when it is
-  the subject's only account candidate. Turning this rule off drops sample precision to 0.961.
+- **Linking and state use different clocks.** Identity is stable, so a record may be linked by
+  any information timed at or before `audit_at`, even a snapshot inside a bundle exported after the
+  audit (`link_by_information_time`). For example, `evidence_02` was exported on 17 Sep but holds a
+  9 Sep snapshot that ties `account_5684` to `user_26`.
+  - State comes only from observations made between `requested_at` and `audit_at` in files
+    captured by `audit_at`, because earlier evidence shows the pre-deletion state.
+  - A file captured after `audit_at` is never cited.
+  - A record with no state produces no step, with two exceptions. An account with an absence proof
+    is kept when it is the subject's only account candidate. A retained record (audit log, legal
+    hold) linked by identifiers is still verified as present in `INCOMPLETE` plans
+    (`verify_retained_without_state`). It never appears in a `COMPLETE` case, which would have
+    nothing to cite.
+  - Turning the request-window rule off drops sample precision to 0.947.
 - **Exact identifiers only.** Matching is exact after normalization: lower-cased emails, hashes and
   user IDs, digits-only phones. Names never link on their own, because three names in the data
   belong to two people each and look-alike decoy emails exist.
@@ -262,45 +270,54 @@ Code applies the review under rules that a manipulated answer cannot get around
   output), cost per purpose, per model and overall, per-request averages, and pricing. Answers
   replayed from the cache are counted at the cost of the call that originally produced them, so
   the totals cover everything behind `output.csv`.
-- **Tests** (`code/tests/`, 18, offline) cover:
+- **Tests** (`code/tests/`, 20, offline) cover:
   - policy decisions and step ordering;
   - intent rules;
   - six log layouts;
   - the merge guardrails, including injection;
   - screenshot anchoring;
   - the claim fallback when nothing is established;
+  - information-time linking, and plan-only checks for retained records;
   - client retries, caching, provider selection and pricing;
   - the usage-report join.
 
 ## Known limitations
 
 - **Recall has a ceiling.** Before any heuristics, 34 of the 152 expected finding/verification
-  steps in the samples (22%) had no identifier link in evidence available by `audit_at`. Some
-  analytics records are anonymized with no identifier left. Some audit records appear only after
-  `audit_at`, or in no participant file. All 20 remaining sample misses are missing steps; there
-  are no wrong or extra steps.
-- **Accounts.** 172 of the 508 eval deletion cases have no account step: no evidence names the
-  account, and batch recovery could not assign one unambiguously. Another 170 accounts come from
-  workflow-batch recovery, which infers the pairing from workflow claims rather than proving it
-  from evidence.
+  steps in the samples (22%) had no identifier link in evidence available by `audit_at`. 13 sample
+  misses remain, all of them missing steps (no wrong or extra steps):
+  - 7 anonymized analytics records and 4 accounts, whose only trace is a workflow-batch row shared
+    with requests of the same reported status;
+  - 2 audit records that appear in no participant file.
+- **Accounts.** 148 of the 508 eval deletion cases have no account step.
+  - In 138, the account sits in a workflow batch shared with requests of the same reported status,
+    so its deletion row cannot be told apart from theirs: no identifier, same window, same result,
+    same audit time, and row order matches no request field.
+  - 10 have no account row at all.
+  - 144 accounts come from workflow-batch recovery, which infers the pairing from workflow claims
+    rather than proving it from evidence. Identifiers link 216.
 - **case_63 is `INCOMPLETE` with no steps.** Its only candidate record (`marketing_001`) is
   claimed for the subject by the data catalog, but the screenshot shows a different person, so the
   claim is rejected. With nothing established, the workflow's NOT_STARTED claim decides the
   status. Every sample answer has an account step, and nothing in the data names this subject's
   account.
-- **The model changed little on this data.** It changed 1 of 518 eval outputs (case_34, a support
-  attachment visible only in a screenshot) and 0 of 32 samples. It agreed with the rule classifier
-  on intent in all 518 cases. Its measured value is on non-English negations and injected
-  instructions (custom cases) and on reading screenshots.
+- **The model changed little on this data.** It changed 7 of 518 eval outputs and 0 of 32 samples:
+  - case_34, a support attachment visible only in a screenshot;
+  - six support records whose own `ticket_attachments` rows show they are attachments (DELETE
+    rather than REDACT).
+
+  It agreed with the rule classifier on intent in all 518 cases. Its measured value is on
+  non-English negations and injected instructions (custom cases), on reading screenshots, and on
+  telling attachments from messages.
 - **Reproducing the exact output needs the local response cache, which `code.zip` does not
-  include.** A fresh run asks the model again (about $0.31 and 36 minutes, calls one at a time),
+  include.** A fresh run asks the model again (about $0.36 and 40 minutes, calls one at a time),
   and its answers can differ where the model reads a screenshot or a request differently.
 - **Interpretation choices the samples do not settle** are encoded as `AuditPolicy` flags or plain
   rules:
   - already-compliant records are verified in `INCOMPLETE` cases;
   - `resource_id` ties sort as strings;
-  - a file is usable only when its manifest `captured_at` is at or before `audit_at`, even if
-    its inner timestamps are earlier;
+  - for state and citations, a file counts only when its manifest `captured_at` is at or before
+    `audit_at`; for identity, the information's own timestamp decides;
   - when several observations prove the same state, the latest is cited;
   - with no record established, the workflow's claim decides the status.
 
@@ -332,7 +349,7 @@ code/
 │   ├── usage_summary.py        builds usage_report.md
 │   ├── evaluation_report.md
 │   └── usage_report.md
-└── tests/                      18 offline unit tests
+└── tests/                      20 offline unit tests
 ```
 
 ## Packaging `code.zip`

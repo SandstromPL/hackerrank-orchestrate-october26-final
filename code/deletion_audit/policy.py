@@ -20,6 +20,7 @@ class Decision:
     finding: Operation | None  # None when the record already has the required treatment
     remediation: Operation | None
     verification: Operation
+    observed: bool = True  # False for a plan-only check of a record no in-window evidence shows
 
     @property
     def compliant(self) -> bool:
@@ -62,6 +63,12 @@ def decide(view: ResourceView, rules: dict[Category, Rule]) -> Decision | None:
             return Decision(view, action, Operation.REPORT_REMAINING_RECORD, Operation.DELETE_RECORD,
                             Operation.VERIFY_RECORD_ABSENT)
         return Decision(view, action, None, None, Operation.VERIFY_RECORD_ABSENT)
+    if action == RequiredAction.RETAIN and state is None:
+        # Linked but not observed in the audit window: still policy-required, so the plan verifies it
+        # remains (if it is gone, that check is what fails; no operation restores it). Snapshots that
+        # merely omit it prove nothing for a retained record. build_steps lists it only in INCOMPLETE
+        # plans, because a COMPLETE case has nothing to cite.
+        return Decision(view, action, None, None, Operation.VERIFY_RECORD_PRESENT, observed=False)
     if not exists or state is None:
         return None  # a retained/redacted/anonymized record that is gone has nothing left to verify
     if action == RequiredAction.RETAIN:

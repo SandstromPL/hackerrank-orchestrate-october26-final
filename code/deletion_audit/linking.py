@@ -1,7 +1,8 @@
 """Connect evidence to a request's subject and reconstruct each record's state at audit time.
 
 Linking and state are deliberately separate:
-  * linking uses any evidence available by `audit_at` (identity is stable over time);
+  * linking uses any evidence available by `audit_at` (identity is stable over time), judged by
+    the time of the information itself when `link_by_information_time` is on;
   * state uses only observations made inside the audit window, because evidence from before the
     request shows the pre-deletion state and says nothing about whether deletion worked.
 """
@@ -17,7 +18,7 @@ from .config import AuditPolicy
 from .domain import Category, DeletionRequest, Observation, Subject
 from .evidence.records import category_for, system_for
 from .evidence.snapshot import Coverage
-from .evidence.store import EvidenceStore
+from .evidence.store import EvidenceStore, available
 from .identity import IdentityIndex
 
 
@@ -48,11 +49,12 @@ def _state_rank(observation: Observation) -> tuple:
 
 class CaseLinker:
     def __init__(self, store: EvidenceStore, identities: IdentityIndex, batches: WorkflowBatches,
-                 policy: AuditPolicy) -> None:
+                 policy: AuditPolicy, retained: frozenset[Category] = frozenset()) -> None:
         self._store = store
         self._identities = identities
         self._batches = batches
         self._policy = policy
+        self._retained = retained  # categories the rules keep (audit logs, legal holds)
 
     # ---- state -------------------------------------------------------------------------
     def _in_window(self, observation: Observation, request: DeletionRequest) -> bool:
@@ -78,7 +80,7 @@ class CaseLinker:
     def linked_resources(self, subject: Subject, cutoff: datetime) -> dict[str, tuple[str, set[str]]]:
         """resource_id -> (basis, unit ids) for every record evidence ties to the subject."""
         linked: dict[str, tuple[str, set[str]]] = {}
-        for observation in self._store.linked(subject.keys, cutoff):
+        for observation in self._store.linked(subject.keys, cutoff, self._policy.link_by_information_time):
             basis, units = linked.get(observation.resource_id, ("identifier", set()))
             units.add(observation.unit_id)
             linked[observation.resource_id] = (basis, units)
@@ -91,7 +93,7 @@ class CaseLinker:
         """Users whose identifiers appear next to this resource in evidence available by cutoff."""
         owners: set[str] = set()
         for observation in self._store.observations(resource_id):
-            if observation.captured_at <= cutoff:
+            if available(observation, cutoff, self._policy.link_by_information_time):
                 for key in observation.link_keys | observation.user_refs:
                     owners |= self._identities.owners(key)
         return owners
@@ -113,7 +115,11 @@ class CaseLinker:
         live = [v for v in views if v.state is not None]
         has_live_account = any(v.system_id == "account_service" for v in live)
         stale_accounts = [v for v in views if v.state is None and v.system_id == "account_service" and v.absence_proof]
-        views = live + ([] if has_live_account else stale_accounts[:1])
+        # A retained record tied to the subject by identifiers stays policy-required even when no
+        # in-window evidence shows it, so the plan still verifies it (policy.decide, observed=False).
+        retained = [v for v in views if v.state is None and v.link_basis == "identifier"
+                    and v.category in self._retained] if self._policy.verify_retained_without_state else []
+        views = live + retained + ([] if has_live_account else stale_accounts[:1])
         recovered = (recovered_accounts or {}).get(request.case_id)
         if recovered and not any(v.system_id == "account_service" for v in views):
             views.append(self.view(request, recovered, "activity_batch", set()))

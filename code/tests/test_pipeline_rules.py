@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,6 +13,7 @@ from deletion_audit.adjudication import AdjudicationOut, CaseAdjudicator  # noqa
 from deletion_audit.dataset import Rule  # noqa: E402
 from deletion_audit.domain import Category, DeletionRequest, DeletionStatus, Observation, Operation, RequiredAction  # noqa: E402
 from deletion_audit.evidence.log_traces import parse_line  # noqa: E402
+from deletion_audit.evidence.store import available  # noqa: E402
 from deletion_audit.intent import classify_intent  # noqa: E402
 from deletion_audit.linking import ResourceView  # noqa: E402
 from deletion_audit.output import validate_row  # noqa: E402
@@ -103,6 +104,31 @@ def test_claim_decides_only_when_no_record_is_established():
     assert status_for(remaining, "COMPLETE") == DeletionStatus.INCOMPLETE  # evidence beats a COMPLETE claim
     gone = [decide(view(obs("account_1", "account_service", Category.USER_PROFILE, exists=False)), RULES)]
     assert status_for(gone, "NOT_STARTED") == DeletionStatus.COMPLETE  # ...and a NOT_STARTED claim
+
+
+def test_identity_links_by_information_time_not_export_time():
+    # A snapshot taken 6 days before the cutoff, inside a bundle exported 2 days after it.
+    late_bundle = obs("audit_record_1", "security_service", Category.SECURITY_AUDIT_LOG,
+                      captured_at=T0 + timedelta(days=2), observed_at=T0 - timedelta(days=6))
+    assert not available(late_bundle, T0)  # by export time the file did not exist yet
+    assert available(late_bundle, T0, by_information_time=True)  # but the information did
+    after = obs("audit_record_2", "security_service", Category.SECURITY_AUDIT_LOG,
+                captured_at=T0 + timedelta(days=2), observed_at=T0 + timedelta(days=1))
+    assert not available(after, T0, by_information_time=True)  # information from after the cutoff never links
+
+
+def test_retained_record_without_state_is_planned_only_in_incomplete_cases():
+    audit = ResourceView("security_service", "audit_record_9", Category.SECURITY_AUDIT_LOG, None, "identifier",
+                         ("evidence_99:t1",))
+    planned = decide(audit, RULES)
+    assert planned.verification == Operation.VERIFY_RECORD_PRESENT and planned.compliant and not planned.observed
+    remaining = decide(view(obs("search_1", "search_service", Category.SEARCH_INDEX_ENTRY)), RULES)
+    steps = json.loads(serialize(build_steps([planned, remaining], DeletionStatus.INCOMPLETE)))
+    assert ("VERIFY_RECORD_PRESENT", "audit_record_9", "") in [(s["operation"], s["resource_id"], s["evidence_id"])
+                                                               for s in steps]
+    assert build_steps([planned], DeletionStatus.COMPLETE) == []  # nothing to cite, so never in a COMPLETE case
+    assert status_for([planned], "NOT_STARTED") == DeletionStatus.INCOMPLETE  # a plan-only check establishes nothing
+    assert status_for([planned]) == DeletionStatus.COMPLETE
 
 
 # ---- intent fallback -----------------------------------------------------------------------

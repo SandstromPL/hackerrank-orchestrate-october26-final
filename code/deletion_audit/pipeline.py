@@ -17,7 +17,7 @@ from .activity import WorkflowBatches
 from .adjudication import CaseAdjudicator
 from .config import CACHE_DIR, DEFAULT_POLICY, AuditPolicy
 from .dataset import Dataset, load_requests
-from .domain import CaseResult, DeletionRequest, DeletionStatus, Subject, case_sort_key
+from .domain import Category, CaseResult, DeletionRequest, DeletionStatus, RequiredAction, Subject, case_sort_key
 from .evidence.store import EvidenceStore
 from .identity import IdentityIndex
 from .intent import IntentResult, classify_intent
@@ -54,7 +54,10 @@ class AuditPipeline:
         self.identities = IdentityIndex(self.dataset.identities, self.dataset.audit_log)
         self.store = EvidenceStore(self.dataset, cache_dir, vision)
         self.batches = WorkflowBatches(self.dataset.activity)
-        self.linker = CaseLinker(self.store, self.identities, self.batches, policy)
+        # Backups are retained too, but their obligation (restore blocked) needs an observed restore state.
+        retained = frozenset(c for c, rule in self.dataset.rules.items()
+                             if rule.action == RequiredAction.RETAIN and c != Category.BACKUP_ARCHIVE)
+        self.linker = CaseLinker(self.store, self.identities, self.batches, policy, retained)
         # Batch membership needs every known request (inputs only), not just the ones being audited.
         self._all_requests = [r for name in ("deletion_requests.csv", "sample_deletion_requests.csv")
                               if (dataset_root / name).exists() for r in load_requests(dataset_root / name)]
@@ -120,7 +123,7 @@ class AuditPipeline:
             return CaseResult(request.case_id, DeletionStatus.INCOMPLETE, (), notes + ("subject not resolved",)), ctx
         claim = request.reported_status if self.policy.follow_claim_when_nothing_established else None
         status = status_for(ctx.decisions, claim)
-        if claim is not None and not ctx.decisions:
+        if claim is not None and not any(d.observed for d in ctx.decisions):
             notes += ("no record established: status follows the workflow's claim",)
         steps = build_steps(ctx.decisions, status,
                             verify_compliant=self.policy.verify_compliant_records_when_incomplete)

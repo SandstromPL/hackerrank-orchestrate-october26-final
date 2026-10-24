@@ -279,3 +279,45 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T16:55:31+00:00] Root cause of the 172 missing account steps and recovery options
+
+User Prompt (verbatim, secrets redacted):
+Before packaging, investigate the 172 deletion cases with no account step and give me options to recover more accounts. I want to made it to top position. u can track the leaderboard from here https://www.hackerrank.com/contests/hackerrank-orchestrate-october26/challenges/ghost-data-still-exists/leaderboard . I want to know why it happened? Whats that one thing?
+
+Agent Response Summary:
+The root cause is that 162 of the 172 cases (94%) are ambiguous, not missing. Their account rows exist, but batch-mates (same reported_at, same reported status, same audit time) produce indistinguishable deletion-worker rows. The ambiguous groups are square (35 of 2x2, 16 of 3x3, and larger), and no order correlates with any request field (concordance 0.46-0.52). The other 10 cases have no account row at all. Three hypotheses were refuted by the data: profile-update rows (0 of 32 sample accounts have one), lookup timing (batch-mates share audit_at), and row ordering. The best recoverable lever turned out to be the evidence-time rule. evidence_02 is a bundle exported 09-17 that contains a 09-09 snapshot linking account_5684 to user_26. Linking identity by the information's own timestamp (state and citations unchanged), plus verifying linked retained records in INCOMPLETE plans, moves sample P/R/F1 from 1.000/0.896/0.945 to 1.000/0.933/0.965 and sequence from 0.562 to 0.656, with 0 wrong steps. On the eval set it adds steps to 105 cases and cuts missing accounts from 172 to 147, with all citations still valid. Two more options were measured: identity from any capture time (same sample gain, contract-violating) and analytics batch recovery (+1 right sample step, 21 eval cases). Guessing breaks even on F1 only in 2x2 groups. The leaderboard redirects to the HackerRank login page; I did not sign in.
+
+Actions:
+* Opened the leaderboard URL in the built-in browser (login required, no sign-in attempted)
+* Scratchpad scripts account_gaps.py, timing_signal.py, account_levers.py, late_identity.py, retain_plan.py and retain_plan_inner.py; analytics recovery check; all code-only (0 model calls), no repo changes
+* Read evidence_02, evidence_92 and the activity batches; scored every variant with evaluation.scoring
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
+
+## [2026-10-24T17:22:46+00:00] Implement information-time identity linking and retained-record plan
+
+User Prompt (verbatim, secrets redacted):
+Implement option 1: link identity by the information's own timestamp (state and citations unchanged), and verify linked retained records in INCOMPLETE plans. Add AuditPolicy flags and unit tests, run the eval for the delta, re-run the full pass with DeepSeek (about 105 new calls), regenerate the rep
+
+Agent Response Summary:
+I added two AuditPolicy flags. link_by_information_time uses evidence/store.available() so that identity links (store.linked, CaseLinker.owners_of) are judged by an observation's own timestamp, while state, absence proofs and citations still need files captured by audit_at. verify_retained_without_state keeps linked audit-log and legal-hold records that have no in-window state and plans them as VERIFY_RECORD_PRESENT; the decision is marked observed=False, appears only in INCOMPLETE plans, and does not count for the claim fallback. My first version reproduced only half the prototype: a 'no absence proof' guard blocked the retained plan, because partial exports omit most audit records. I removed the guard and made build_steps skip plan-only checks in COMPLETE cases. Two new unit tests bring the total to 20, all passing. Samples: P/R/F1 went from 1.000/0.896/0.945 to 1.000/0.933/0.965, resource recall from 0.820 to 0.883, and sequence from 0.562 to 0.656, with 0 wrong steps and the same result with and without the model; I re-measured the ablations against the new defaults. The full DeepSeek run (20261024T170549Z) made 152 live and 377 cached answers in 13.8 min, with one corrective retry and 0 failures. Statuses stayed at 153/355/10, there are 0 violations, and all 1,082 citations are valid. 105 cases changed: +98 retained-record checks, +24 accounts (missing accounts 172 to 148), and 6 support records the model reclassified as attachments. I verified those against their own ticket_attachments rows. The total cost behind the file is $0.357.
+
+Actions:
+* code/deletion_audit/config.py (2 flags), evidence/store.py (available helper), linking.py, policy.py (Decision.observed, RETAIN plan), steps.py, pipeline.py; code/tests/test_pipeline_rules.py (+2 tests)
+* code/evaluation/main.py runs: info-time-code-only, info-time-identity (model, 10 calls, $0.008) and 7 ablations; full run .venv/bin/python code/main.py (152 live calls)
+* Regenerated code/evaluation/usage_report.md; updated evaluation_report.md (results, misses, ablations, iteration log, final run, failure 10), README.md and CLAUDE.md (§3 rule, §5 decisions); committed
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
