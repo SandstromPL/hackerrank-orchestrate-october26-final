@@ -385,3 +385,35 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T18:19:30+00:00] Submission checkpoint, section-9 follow-ups, interview notes v2
+
+User Prompt (verbatim, secrets redacted):
+9. If I had more time
+
+* Batch recovery for anonymized analytics: measured +1 right sample step and 21 eval records.
+* Parallel model calls with a rate limit.
+* A review-queue output for "kept for review" and ambiguous-batch cases.
+
+Why haven't we do this? we still have time.
+For progress till now prepare everything required for the submission. Then go thorugh the ponit no. 9 you mentioned at the last of the interview.md , added the same point above. And its mentioned like how interview will go on : Live explanation of your architecture, approach, and evaluation. Also i just reccieved the mail about how to submit and what would likely be asked on interview : question about our submission (pitching) , how we build our system, the tradeoffs which we have taken and the general system design of the agent which we build. So give me notes accordingly.
+
+Agent Response Summary:
+First snapshotted a complete submission at the current state: output.csv validated (518 rows, 1,082 citations, 0 problems) and replayed byte-identical from the response cache; 21 tests passed; code.zip rebuilt and scanned; log committed; commit tagged submission-checkpoint-1; code.zip, output.csv, log.txt and a redaction-verified agent-trace.zip (desktop session export plus all 15 session JSONLs, account email redacted) copied to the git-ignored submission/checkpoint-1 with SHA256SUMS, plus submission/build_agent_trace.sh to rebuild the trace after the app is quit. Then implemented the three follow-ups, each behind a flag or with no output change, with tests and measured deltas. (1) AccountRecovery became BatchRecovery; anonymized analytics profiles are recovered from ANONYMIZE_RECORD rows without outcome matching (NOT_STARTED runs still anonymize): samples recall 0.933 -> 0.938, F1 0.965 -> 0.968, precision 1.000; eval +20 evidence-cited steps, no status flips. A label-free holdout on 185 identifier-linked accounts gave 141 right, 44 abstentions, 0 wrong. (2) Model calls run on a rate-limited thread pool (8 in flight, 4 starts/s) with a per-run memo, while decisions stay single-threaded: a cold sample run went from 267 s to 63 s for the same calls and cost. (3) review_queue.csv lists the calls the evidence could not settle, with a priority and the competing batch-mates: 351 items in 271 cases. Final full run 20261024T181324Z: statuses 153/355/10, 2,997 steps, 1,102 valid citations, $0.352 in total; README, evaluation and usage reports, and CLAUDE.md updated. The interview notes were rewritten around the four themes from the organizer email, plus a 5-minute talk track, and fact-checked (provider rationale and claim wording corrected).
+
+Actions:
+* Validated and replayed output.csv; ran pytest; rebuilt code.zip twice (README command) with content and secret scans
+* git tag submission-checkpoint-1; commits 2893bce, edc2362, 11fb3aa, 14a450d
+* Desktop session export (mcp export_transcript) and submission/build_agent_trace.sh -> agent-trace.zip (git-ignored)
+* Edited code/deletion_audit/linking.py, config.py, pipeline.py, llm_client.py, adjudication.py, screenshot_reader.py, domain.py, output.py, code/main.py, code/evaluation/usage_summary.py, tests; .env.example
+* Scratchpad holdout_recovery.py and speed_ab.py (cold-cache A/B: 86 live DeepSeek calls, about $0.06 off-peak); code-only ablations x9; model-backed sample eval; full 518 run (20 live calls)
+* Updated README.md, CLAUDE.md, code/evaluation/evaluation_report.md, code/evaluation/usage_report.md; wrote review_queue.csv; rewrote interview_notes.md (untracked)
+* Saved a project memory about the interview format and submission snapshots
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
