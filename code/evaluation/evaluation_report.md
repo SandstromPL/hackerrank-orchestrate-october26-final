@@ -1,9 +1,10 @@
 # Evaluation report
 
-Status: the submitted `output.csv` comes from run `20261024T170549Z`, the full 518-case pass with
-DeepSeek model review (`deepseek-flash`, 2026-10-24), made after information-time linking. On the
-32 samples the code-only and model paths score identically. On the 518 eval requests the model
-changed 7 cases (section "Final full run"). Tokens and cost are in `usage_report.md`.
+Status: the submitted `output.csv` comes from run `20261024T172602Z`, the full 518-case pass with
+DeepSeek model review (`deepseek-flash`, 2026-10-24), made after information-time linking and the
+most-specific-category rule. On the 32 samples the code-only and model paths score identically.
+On the 518 eval requests the model changed 1 case (section "Final full run"). Tokens and cost are
+in `usage_report.md`.
 
 ## How to reproduce
 
@@ -12,7 +13,7 @@ python3 code/main.py                            # full run (518 requests) -> out
 python3 code/evaluation/usage_summary.py --write  # usage_report.md from the latest full-run record
 python3 code/evaluation/main.py                 # samples + custom cases, saves .cache/eval/<run>.json
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # single-flag ablation
-python3 -m pytest -q code/tests                 # 20 unit tests
+python3 -m pytest -q code/tests                 # 21 unit tests
 ```
 
 ## Metrics
@@ -84,14 +85,15 @@ about $0.26 off-peak ($0.53 peak) and ~35 minutes sequentially.
 
 ## Final full run (518 eval requests, DeepSeek review)
 
-`python3 code/main.py`, 2026-10-24 17:06-17:20 UTC (13.8 min, one call at a time), run record
-`20261024T170549Z`:
-- It used 529 model answers (518 case reviews and 11 screenshot transcripts): 152 made during the
-  run and 377 replayed from earlier runs, 0 failed. One answer needed the corrective retry after a
-  malformed JSON reply.
+`python3 code/main.py`, 2026-10-24 17:26-17:27 UTC (1.1 min, one call at a time), run record
+`20261024T172602Z`:
+- It used 529 model answers (518 case reviews and 11 screenshot transcripts): 14 made during the
+  run and 515 replayed from earlier runs, 0 failed.
 - No case fell back to the deterministic result, and none raised an error.
-- Everything behind the file cost $0.357 for 531 billed calls, all off-peak. The first live run
-  (15:26-16:02 UTC, 36 min) had made 506 of the answers for $0.29, against a projection of $0.26.
+- Everything behind the file cost $0.353 for 531 billed calls, all off-peak.
+- Earlier runs made the rest. The first live run (15:26-16:02 UTC, 36 min) made 506 answers for
+  $0.29, against a projection of $0.26. The information-time run (17:06-17:20 UTC) made 152 more;
+  one of them needed the corrective retry after a malformed JSON reply.
 
 Details in `usage_report.md`.
 
@@ -111,7 +113,7 @@ changed, none lost a step.
 - +24 account VERIFY_RECORD_ABSENT. Deletion cases without an account step fell from 172 to 148
   (138 in ambiguous batches, 10 with no account row). Accounts are now linked by identifiers in 216
   cases and by batch recovery in 144.
-- 6 support records re-reviewed by the model became attachments (below).
+- 6 support records turned out to be attachments (below; now decided by code).
 
 Total steps rose from 2,855 to 2,977.
 
@@ -122,7 +124,7 @@ current rules):
 |---|---|---|
 | COMPLETE / INCOMPLETE / NOT_APPLICABLE | 153 / 355 / 10 | 153 / 355 / 10 |
 | Steps in `output.csv` | 2,974 | 2,977 |
-| Cases whose output differs | | 7 of 518 (case_34 and six attachments) |
+| Cases whose output differs | | 1 of 518 (case_34) |
 
 case_34 (user_11) gains REPORT_REMAINING_RECORD `support_9538` (evidence_04), DELETE_RECORD and
 VERIFY_RECORD_ABSENT. Checked by hand against the evidence:
@@ -135,18 +137,16 @@ VERIFY_RECORD_ABSENT. Checked by hand against the evidence:
 - The model refined the category from the system default SUPPORT_MESSAGE to
   SUPPORT_ATTACHMENT (rule_06: DELETE), citing the attachment scan.
 
-Six support records changed from REDACT to DELETE (case_131, case_179, case_227, case_275,
-case_431, case_527):
-- Each has its own `ticket_attachments` row: a file such as `delivery_confirmation_84.pdf`,
-  `storage_class` `ticket_attachment`, uploaded by the subject.
+Eight support records are attachments and are DELETE, not REDACT: case_71, case_119, case_131,
+case_179, case_227, case_275, case_431 and case_527.
+- Each has its own `ticket_attachments` row (a file such as `delivery_confirmation_84.pdf`,
+  `storage_class` `ticket_attachment`, uploaded by the subject) or an attachment-scan trace.
 - Its latest in-window observation is a generic ticket export, which the parser files under the
   support-message default.
-- The model refined the category to SUPPORT_ATTACHMENT, so rule_06 (DELETE) applies. That matches
-  the sample convention (case_07, case_13). I checked four of them by hand.
-
-The previous run did not refine these; their dossiers changed with the new links. A code-only rule
-("the most specific category any linked observation gives wins") would make this deterministic.
-It is still open.
+- The model caught 6 of them when the information-time run re-reviewed those cases.
+- Code now decides all 8 (`category_from_most_specific_observation`, iteration
+  `specific-category`), so rule_06 (DELETE) applies in both paths. That matches the sample
+  convention (case_07, case_13). I checked six of them by hand.
 
 What the model judged across all 518 cases (replayed from the cache, no new calls):
 
@@ -155,8 +155,9 @@ What the model judged across all 518 cases (replayed from the cache, no new call
   the 10 non-deletion requests were typed as correction 2, marketing opt-out 2, data export 2,
   account support 2, access 1 and billing 1.
 - Prompt injection: none flagged.
-- Ownership: 1,375 records "yes", 162 "uncertain", 0 "no", so no record was dropped.
-- Category: 7 refinements (case_34 and the six attachments above).
+- Ownership: 1,376 records "yes", 161 "uncertain", 0 "no", so no record was dropped.
+- Category: none needed. Code now gives these records their specific category, including case_34's
+  support_9538, which an attachment-scan trace marks.
 
 case_63 (decided 2026-10-24):
 - Its only candidate record, `marketing_001`, is claimed for the subject by the data catalog, but
@@ -182,6 +183,7 @@ status accuracy, and no change to step metrics or sequence accuracy.
 | fix-pipe-log-layout | pipe-delimited logs were never grouped into traces (found by a unit test) | unchanged | | | | | kept: 10 eval cases gain missed records |
 | claim-fallback | no record established for the subject -> the workflow's claim decides (COMPLETE stands, otherwise INCOMPLETE) | unchanged | | | | | kept: eval case_63 COMPLETE -> INCOMPLETE. The generic "no evidence-backed step -> INCOMPLETE" rule was rejected: it flips sample case_04 (status 1.000 -> 0.969) |
 | info-time-identity | Identity links by the information's own timestamp: a 09-09 snapshot inside a bundle exported 09-17 counts, while state and citations still need files captured by audit_at. Linked retained records with no in-window state are verified in INCOMPLETE plans. | 1.000 | 1.000 | 0.933 | 0.965 | 0.656 | kept: 0 wrong sample steps. Eval: 105 cases gain steps; accounts missing 172 -> 148 |
+| specific-category | A record's category comes from its most specific observation: a stated type, then a collection- or event-derived one (`ticket_attachments`, attachment scans), then the system default. | 1.000 | 1.000 | 0.933 | 0.965 | 0.656 | kept: samples unchanged. Eval: 8 support records REDACT -> DELETE, 2 of them beyond what the model had caught (case_71, case_119) |
 
 ## Ablations (one flag off, samples; code-only, against the current defaults)
 
@@ -194,6 +196,7 @@ status accuracy, and no change to step metrics or sequence accuracy.
 | `match_workflow_outcome` | 1.000 | 0.942 | 0.562 | Outcome agreement resolves sample accounts that elimination alone cannot. |
 | `state_window_starts_at_request` | 0.947 | 0.940 | 0.500 | Precision drops, because pre-request evidence shows the pre-deletion state. |
 | `verify_compliant_records_when_incomplete` | 1.000 | 0.965 | 0.656 | No sample exercises it; custom_03 F1 drops from 0.968 to 0.857. |
+| `category_from_most_specific_observation` | 1.000 | 0.965 | 0.656 | No sample exercises it. On the eval set it changes 8 support records from REDACT to DELETE (attachments by their own rows or traces). |
 | `follow_claim_when_nothing_established` | 1.000 | 0.965 | 0.656 | No sample exercises it (case_04's claim is COMPLETE either way). On the eval set it changes only case_63. |
 
 ## Custom evaluation cases
@@ -246,3 +249,10 @@ Defined in `code/evaluation/custom_cases.py` (real users and evidence, one input
     measured and rejected: identity from files of any date (same sample gain; information dated
     after the audit breaks the contract), and guessing inside ambiguous batches (breaks even on F1
     only in 2x2 groups).
+11. Support attachments were redacted instead of deleted when their latest in-window observation
+    was a generic ticket export. The view took its category from that export's support-message
+    default, ignoring the record's own `ticket_attachments` row or attachment-scan trace. Only the
+    model's review caught this, and only for 6 of the 8 records (the cases it happened to re-review).
+    -> A record's category now comes from its most specific observation
+    (`category_from_most_specific_observation`, unit test). All 8 are deterministic in code, and the
+    model's only remaining output effect is case_34's screenshot-derived state.

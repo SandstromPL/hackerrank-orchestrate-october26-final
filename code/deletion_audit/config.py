@@ -40,6 +40,12 @@ class AuditPolicy:
     # window is still policy-required, so INCOMPLETE plans verify it remains. A COMPLETE case never
     # lists it, because there is no evidence to cite.
     verify_retained_without_state: bool = True
+    # A record's category is a fact about the record, not its state. The most specific category any
+    # observation available by audit_at gives it wins: a stated record type, then one derived from a
+    # collection or event (a `ticket_attachments` row), then the system default. Without it, the
+    # latest in-window observation decides, and a generic ticket export files an attachment under
+    # SUPPORT_MESSAGE.
+    category_from_most_specific_observation: bool = True
 
 
 DEFAULT_POLICY = AuditPolicy()

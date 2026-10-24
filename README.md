@@ -26,7 +26,7 @@ The challenge contract is in `problem_statement.md` and `AGENTS.md` in the chall
 |---|---|
 | 32 public samples (scored against `sample_output.csv`) | status accuracy 1.000, step precision / recall / F1 1.000 / 0.933 / 0.965, sequence accuracy 0.656 (21/32), 0 contract violations |
 | 4 hand-built cases (`code/evaluation/custom_cases.py`) | status accuracy 0.750 code-only, 1.000 with the model review |
-| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,977 steps, 0 contract violations, all 1,082 citations exist and predate `audit_at`. 529 model answers: 152 made in the final 14-minute run, the rest replayed from the response cache. Everything behind the file cost $0.357 (531 billed calls). |
+| Final full run (518 requests) | 153 COMPLETE, 355 INCOMPLETE, 10 NOT_APPLICABLE, 2,977 steps, 0 contract violations, all 1,082 citations exist and predate `audit_at`. 529 model answers: 14 made in the final run, the rest replayed from the response cache. Everything behind the file cost $0.353 (531 billed calls). |
 
 Details: [`code/evaluation/evaluation_report.md`](code/evaluation/evaluation_report.md) and
 [`code/evaluation/usage_report.md`](code/evaluation/usage_report.md).
@@ -88,7 +88,7 @@ python3 code/main.py --requests dataset/sample_deletion_requests.csv --output /t
 python3 code/evaluation/main.py                       # score samples + custom cases
 python3 code/evaluation/main.py --set match_workflow_outcome=false   # one-flag ablation
 python3 code/evaluation/usage_summary.py --write      # usage_report.md from the latest full run
-python3 -m pytest -q code/tests                       # 20 unit tests, offline
+python3 -m pytest -q code/tests                       # 21 unit tests, offline
 ```
 
 A full run with the model makes one review call per case, one at a time. It logs progress every 50
@@ -228,6 +228,14 @@ Code applies the review under rules that a manipulated answer cannot get around
   catalog row anchors, by ID or display alias, can link to a person, and only if the screen shows
   that person or shows nobody. Email misreads are tolerated with a 0.85 similarity threshold.
   Other rows contribute state but never create links.
+- **A record's category comes from its most specific observation**
+  (`category_from_most_specific_observation`).
+  - Category is a fact about the record, not its state. A stated record type beats one derived from
+    a collection or event, which beats the system default.
+  - For example, a `ticket_attachments` row or an attachment-scan trace beats a later generic
+    ticket export that files every ticket as a support message. Otherwise attachments would be
+    redacted instead of deleted.
+  - Before this rule only the model's review caught them, and it caught 6 of the 8 in the eval set.
 - **Policy.** Each rule maps a category to one treatment:
   - DELETE: still present → remaining record → delete;
   - REDACT: direct identifiers present → exposed PII → redact (a stable `user_id` may remain, as
@@ -270,7 +278,7 @@ Code applies the review under rules that a manipulated answer cannot get around
   output), cost per purpose, per model and overall, per-request averages, and pricing. Answers
   replayed from the cache are counted at the cost of the call that originally produced them, so
   the totals cover everything behind `output.csv`.
-- **Tests** (`code/tests/`, 20, offline) cover:
+- **Tests** (`code/tests/`, 21, offline) cover:
   - policy decisions and step ordering;
   - intent rules;
   - six log layouts;
@@ -278,6 +286,7 @@ Code applies the review under rules that a manipulated answer cannot get around
   - screenshot anchoring;
   - the claim fallback when nothing is established;
   - information-time linking, and plan-only checks for retained records;
+  - categories taken from the most specific observation;
   - client retries, caching, provider selection and pricing;
   - the usage-report join.
 
@@ -301,14 +310,11 @@ Code applies the review under rules that a manipulated answer cannot get around
   claim is rejected. With nothing established, the workflow's NOT_STARTED claim decides the
   status. Every sample answer has an account step, and nothing in the data names this subject's
   account.
-- **The model changed little on this data.** It changed 7 of 518 eval outputs and 0 of 32 samples:
-  - case_34, a support attachment visible only in a screenshot;
-  - six support records whose own `ticket_attachments` rows show they are attachments (DELETE
-    rather than REDACT).
-
-  It agreed with the rule classifier on intent in all 518 cases. Its measured value is on
-  non-English negations and injected instructions (custom cases), on reading screenshots, and on
-  telling attachments from messages.
+- **The model changed little on this data.** It changed 1 of 518 eval outputs (case_34, a support
+  attachment visible only in a screenshot) and 0 of 32 samples. Code now tells attachments from
+  messages on its own (8 eval records). The model agreed with the rule classifier on intent in all
+  518 cases. Its measured value is on non-English negations and injected instructions (custom
+  cases) and on reading screenshots.
 - **Reproducing the exact output needs the local response cache, which `code.zip` does not
   include.** A fresh run asks the model again (about $0.36 and 40 minutes, calls one at a time),
   and its answers can differ where the model reads a screenshot or a request differently.
@@ -349,7 +355,7 @@ code/
 │   ├── usage_summary.py        builds usage_report.md
 │   ├── evaluation_report.md
 │   └── usage_report.md
-└── tests/                      20 offline unit tests
+└── tests/                      21 offline unit tests
 ```
 
 ## Packaging `code.zip`

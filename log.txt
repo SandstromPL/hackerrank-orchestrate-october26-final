@@ -321,3 +321,24 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T17:28:43+00:00] Deterministic category rule: most specific observation wins
+
+User Prompt (verbatim, secrets redacted):
+Add a code-only rule: a record's category is the most specific one any linked observation gives it (ticket_attachments beats the support default), behind a flag with a test. Run the eval and diff the 518 output, then commit.
+
+Agent Response Summary:
+I first measured the data: 34 records carry a non-default category in some observation, and none has two conflicting non-default categories. I then added the AuditPolicy flag category_from_most_specific_observation. linking.most_specific_category picks a stated type over a collection- or event-derived one over the system default, with ties going to the latest observation. It considers observations available by audit_at under the identity clock, and CaseLinker.view uses it. A new unit test brings the total to 21, all passing. Samples and custom cases are unchanged with the flag on and off (status 1.000, F1 0.965, sequence 0.656; 0 model calls). Code-only, 8 eval support records change from REDACT to DELETE: the 6 the model had caught plus case_71 and case_119, both of which I verified as attachments by their own attachment-scan traces. The full DeepSeek run (20261024T172602Z: 14 live calls, 515 cached, 66 s) changed only case_71 and case_119 against the committed file. It has 0 violations and all 1,082 citations are valid. The model output now differs from code-only only in case_34 (screenshot state) and needs 0 category refinements. The total cost behind the file is $0.353.
+
+Actions:
+* code/deletion_audit/config.py (flag), linking.py (most_specific_category, used in view); code/tests/test_pipeline_rules.py (+1 test)
+* code/evaluation/main.py runs specific-category-code-only, ablation-specific-category-off and specific-category (model, 0 calls); full run .venv/bin/python code/main.py (14 live calls); 518 diffs against the committed and code-only outputs
+* Regenerated code/evaluation/usage_report.md; updated evaluation_report.md (status, final run, ablation, iteration log, failure 11), README.md and CLAUDE.md §5; committed
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

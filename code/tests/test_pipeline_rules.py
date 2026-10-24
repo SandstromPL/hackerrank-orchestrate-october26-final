@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,7 +16,7 @@ from deletion_audit.domain import Category, DeletionRequest, DeletionStatus, Obs
 from deletion_audit.evidence.log_traces import parse_line  # noqa: E402
 from deletion_audit.evidence.store import available  # noqa: E402
 from deletion_audit.intent import classify_intent  # noqa: E402
-from deletion_audit.linking import ResourceView  # noqa: E402
+from deletion_audit.linking import ResourceView, most_specific_category  # noqa: E402
 from deletion_audit.output import validate_row  # noqa: E402
 from deletion_audit.policy import decide  # noqa: E402
 from deletion_audit.steps import build_steps, serialize, status_for  # noqa: E402
@@ -129,6 +130,20 @@ def test_retained_record_without_state_is_planned_only_in_incomplete_cases():
     assert build_steps([planned], DeletionStatus.COMPLETE) == []  # nothing to cite, so never in a COMPLETE case
     assert status_for([planned], "NOT_STARTED") == DeletionStatus.INCOMPLETE  # a plan-only check establishes nothing
     assert status_for([planned]) == DeletionStatus.COMPLETE
+
+
+def test_category_comes_from_the_most_specific_observation():
+    attachment_row = obs("support_7", "support_platform", Category.SUPPORT_ATTACHMENT, observed_at=T0 - timedelta(days=3))
+    generic_export = obs("support_7", "support_platform", Category.SUPPORT_MESSAGE)  # later, but only the default
+    assert most_specific_category([attachment_row, generic_export], Category.SUPPORT_MESSAGE) == Category.SUPPORT_ATTACHMENT
+    assert most_specific_category([generic_export], Category.SUPPORT_MESSAGE) is None  # keep the state's category
+    stated = obs("support_7", "support_platform", Category.SECONDARY_IDENTIFIER, category_stated=True,
+                 observed_at=T0 - timedelta(days=9))
+    assert most_specific_category([attachment_row, generic_export, stated],
+                                  Category.SUPPORT_MESSAGE) == Category.SECONDARY_IDENTIFIER  # a stated type wins
+    exposed = view(obs("support_7", "support_platform", Category.SUPPORT_MESSAGE, direct_identifiers=frozenset({"a@b.com"})))
+    assert decide(exposed, RULES).remediation == Operation.REDACT_RECORD  # read as a message
+    assert decide(replace(exposed, category=Category.SUPPORT_ATTACHMENT), RULES).remediation == Operation.DELETE_RECORD
 
 
 # ---- intent fallback -----------------------------------------------------------------------

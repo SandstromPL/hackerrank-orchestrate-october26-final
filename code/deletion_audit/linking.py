@@ -41,6 +41,16 @@ class ResourceView:
         return self.absence_proof.evidence_id if self.absence_proof else ""
 
 
+def most_specific_category(observations: list[Observation], default: Category | None) -> Category | None:
+    """The most specific category the observations give a record, or None if they only give the
+    system default. A stated record type beats one derived from a collection or event name (a
+    `ticket_attachments` row); ties go to the latest observation."""
+    specific = [o for o in observations if o.category is not None and (o.category_stated or o.category != default)]
+    if not specific:
+        return None
+    return max(specific, key=lambda o: (o.category_stated, o.observed_at, o.captured_at, o.evidence_id)).category
+
+
 def _state_rank(observation: Observation) -> tuple:
     # Latest observation wins; file evidence beats activity checks at the same instant.
     return (observation.observed_at, not observation.evidence_id.startswith("activity_"),
@@ -103,6 +113,9 @@ class CaseLinker:
         observations = self._store.observations(resource_id)
         system_id = state.system_id if state else (observations[0].system_id if observations else system_for(resource_id))
         category = state.category if state else category_for(system_id)
+        if self._policy.category_from_most_specific_observation:
+            usable = [o for o in observations if available(o, request.audit_at, self._policy.link_by_information_time)]
+            category = most_specific_category(usable, category_for(system_id)) or category
         proof = self.absence_proof(system_id, resource_id, request) if state is None else None
         return ResourceView(system_id, resource_id, category, state, basis, tuple(sorted(units)), proof)
 
