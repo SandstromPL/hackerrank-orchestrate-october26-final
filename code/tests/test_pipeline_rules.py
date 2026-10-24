@@ -170,3 +170,32 @@ def test_merge_ignores_unbacked_vetoes_and_everything_after_an_injection():
                                    [soft], injected, frozenset({"a@b.com"}))
     assert review.intent.is_deletion  # plain deletion wording survives a manipulated model answer
     assert [v.resource_id for v in review.views] == ["marketing_1"]  # no vetoes applied after an injection
+
+
+# ---- screenshot (vision) rows -----------------------------------------------------------------
+def test_vision_rows_link_only_through_catalog_anchors():
+    from deletion_audit.domain import CatalogLink, EvidenceFile
+    from deletion_audit.evidence.screenshots import observations_from_vision
+
+    catalog = [
+        CatalogLink("activity_1", T0, "support_platform", "support_1034", "support_1034", "kagyeman8947@fastmail.com",
+                    "user_22", False),
+        CatalogLink("activity_2", T0, "identity_service", "tombstone_17", "user_17", "leonie@x.com", "user_17", False),
+        CatalogLink("activity_3", T0, "marketing_platform", "marketing_001", "marketing_001", "kwame@x.com", "user_09",
+                    False),
+    ]
+    rows = [
+        {"resource_id": "support_1034", "identifiers": ["kageman8947@fastmail.com"], "names": ["Kofi Agyeman"]},
+        {"resource_id": "user_17", "identifiers": ["user_17"], "names": []},
+        {"resource_id": "marketing_001", "identifiers": ["sj.park@naver.com"], "names": ["Soo-jin Park"]},
+        {"resource_id": "audit_record_005", "identifiers": ["user_03"], "names": []},
+        {"resource_id": "delivery_confirmation_20.pdf", "identifiers": [], "names": []},
+    ]
+    evidence = EvidenceFile("evidence_x", "evidence/images/x.png", "test", T0)
+    obs_by_id = {o.resource_id: o for o in observations_from_vision(evidence, rows, catalog).observations}
+    assert set(obs_by_id) == {"support_1034", "tombstone_17", "marketing_001", "audit_record_005"}
+    assert obs_by_id["support_1034"].linkable  # one misread letter still corroborates the catalog person
+    assert obs_by_id["tombstone_17"].linkable and obs_by_id["tombstone_17"].category == Category.ACCOUNT_TOMBSTONE
+    assert not obs_by_id["tombstone_17"].identifiable  # only the stable user_id is shown
+    assert not obs_by_id["marketing_001"].linkable  # the screen shows someone else
+    assert not obs_by_id["audit_record_005"].linkable  # a list row without its own anchor

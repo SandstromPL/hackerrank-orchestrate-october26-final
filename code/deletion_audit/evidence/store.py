@@ -56,8 +56,9 @@ class EvidenceStore:
         self._by_key: dict[str, list[Observation]] = defaultdict(list)
         for observation in self.file_observations + self.activity_observations:
             self._by_resource[observation.resource_id].append(observation)
-            for key in observation.link_keys | observation.user_refs:
-                self._by_key[key].append(observation)
+            if observation.linkable:
+                for key in observation.link_keys | observation.user_refs:
+                    self._by_key[key].append(observation)
 
     def observations(self, resource_id: str) -> list[Observation]:
         return self._by_resource.get(resource_id, [])

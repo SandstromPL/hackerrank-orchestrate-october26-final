@@ -188,6 +188,7 @@ class Observation:
     unit_id: str = ""
     related_resources: frozenset[str] = frozenset()
     category_stated: bool = False  # the evidence itself names the category (ledger rows)
+    linkable: bool = True  # False for list-view rows that may describe state but must not create links
 
     @property
     def identifiable(self) -> bool:

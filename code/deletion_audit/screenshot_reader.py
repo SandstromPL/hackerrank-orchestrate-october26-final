@@ -17,7 +17,7 @@ from .llm_client import LLMClient
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "screenshot-v1"
+PROMPT_VERSION = "screenshot-v3"
 SCHEMA: dict = {
     "type": "object",
     "properties": {

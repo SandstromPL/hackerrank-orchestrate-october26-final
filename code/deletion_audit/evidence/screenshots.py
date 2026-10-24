@@ -16,8 +16,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from ..domain import CatalogLink, Category, EvidenceFile, Observation
-from .identifiers import EMAIL_RE, USER_RE, extract, extract_direct, normalize
-from .records import category_for
+from .identifiers import EMAIL_RE, RESOURCE_RE, USER_RE, extract, extract_direct, normalize
+from .records import category_for, system_for
 from .snapshot import ParsedEvidence
 
 OCR_RESOURCE_RE = re.compile(
@@ -88,28 +88,38 @@ def _ocr_flags(category: Category | None, text: str) -> tuple[bool | None, bool 
     return enabled, restore
 
 
+def _vision_link_holds(link: CatalogLink, identifiers: set[str]) -> bool:
+    """Same rule as the OCR path: the record shows the catalog person (allowing a misread
+    character), or shows nobody. A record showing only someone else contradicts the claim."""
+    if not identifiers or link.user_id in identifiers or link.email in identifiers:
+        return True
+    return any(_similar(link.email, key) for key in identifiers if "@" in key)
+
+
 def observations_from_vision(evidence: EvidenceFile, records: list[dict], catalog: list[CatalogLink]) -> ParsedEvidence:
     """Observations from the cached vision extraction (one entry per record shown on screen).
 
-    Each record links through its own identifiers; a catalog claim about the same resource adds
-    the catalog person only if the record shows that person or shows nobody.
+    A screen is a list view: only the record a data-catalog row anchors (by ID or display alias)
+    links to a person. Other rows still contribute their state, but never create links, so a
+    screen full of one person's events does not turn every row into a finding.
     """
+    by_resource = {link.resource_id: link for link in catalog}
+    by_alias = {link.alias.lower(): link for link in catalog if link.alias}
     parsed = ParsedEvidence()
     for index, record in enumerate(records):
-        resource_id = str(record.get("resource_id") or "").strip()
-        if not resource_id:
-            continue
-        system_id = str(record.get("system_id") or "")
+        shown_id = str(record.get("resource_id") or "").strip()
+        link = by_resource.get(shown_id) or by_alias.get(shown_id.lower())
+        resource_id = link.resource_id if link else shown_id
+        if not RESOURCE_RE.fullmatch(resource_id):
+            continue  # display names and file names are not addressable records
+        system_id = link.system_id if link else system_for(resource_id, str(record.get("system_id") or ""))
         identifiers = {normalize(str(v)) for v in record.get("identifiers", []) if normalize(str(v))}
-        for link in catalog:
-            if link.resource_id == resource_id and (not identifiers or identifiers & {link.email, link.user_id}):
-                identifiers |= {link.email, link.user_id}
+        keys = {link.email, link.user_id} if link and _vision_link_holds(link, identifiers) else set()
         direct = {key for key in identifiers if not USER_RE.fullmatch(key)}
         direct |= {"name:" + str(n).lower() for n in record.get("names", []) if n}
-        try:
-            category = Category(str(record.get("category") or "")) if record.get("category") else category_for(system_id)
-        except ValueError:
-            category = category_for(system_id)
+        category = category_for(system_id)
+        if system_id == "support_platform" and record.get("category") == Category.SUPPORT_ATTACHMENT.value:
+            category = Category.SUPPORT_ATTACHMENT
         parsed.observations.append(
             Observation(
                 evidence_id=evidence.file_id,
@@ -121,11 +131,12 @@ def observations_from_vision(evidence: EvidenceFile, records: list[dict], catalo
                 exists=record.get("exists", True),
                 direct_identifiers=frozenset(d for d in direct if d),
                 user_refs=frozenset(k for k in identifiers if k and USER_RE.fullmatch(k)),
-                link_keys=frozenset(k for k in identifiers if k),
+                link_keys=frozenset(k for k in keys if k),
                 enabled=record.get("enabled"),
                 restore_allowed=record.get("restore_allowed"),
                 excerpt=f"[screenshot:vision] {record.get('summary', '')}"[:900],
                 unit_id=f"{evidence.file_id}:vision{index}",
+                linkable=bool(keys),
             )
         )
     return parsed
@@ -135,8 +146,17 @@ def parse_screenshot(
     evidence: EvidenceFile, path: Path, catalog: list[CatalogLink], cache_dir: Path,
     vision_records: list[dict] | None = None,
 ) -> ParsedEvidence:
-    if vision_records is not None:
-        return observations_from_vision(evidence, vision_records, catalog)
+    """Vision transcript when available; the OCR reading backs up any anchored record it missed."""
+    ocr = _ocr_observations(evidence, path, catalog, cache_dir)
+    if vision_records is None:
+        return ocr
+    parsed = observations_from_vision(evidence, vision_records, catalog)
+    seen = {o.resource_id for o in parsed.observations}
+    parsed.observations.extend(o for o in ocr.observations if o.resource_id not in seen)
+    return parsed
+
+
+def _ocr_observations(evidence: EvidenceFile, path: Path, catalog: list[CatalogLink], cache_dir: Path) -> ParsedEvidence:
     parsed = ParsedEvidence()
     text = ocr_text(path, cache_dir / "ocr")
     if not text:
@@ -165,6 +185,7 @@ def parse_screenshot(
                 restore_allowed=restore,
                 excerpt="[screenshot:ocr] " + " ".join(text.split())[:900],
                 unit_id=f"{evidence.file_id}:screen",
+                linkable=bool(keys),
             )
         )
     return parsed
