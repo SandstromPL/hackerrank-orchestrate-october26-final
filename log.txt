@@ -503,3 +503,22 @@ branch=main
 repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T19:14:55+00:00] Interview notes adapted for an audio call with an AI interviewer
+
+User Prompt (verbatim, secrets redacted):
+and yeah btw its audio call interview with AI
+
+Agent Response Summary:
+Adapted interview_notes.md (untracked) for an audio-only call with an AI interviewer. Removed the screen cues and rephrased the walkthrough to describe instead of show. Added a short playbook: answer in the first sentence, about a minute then a clear stop, signpost and pause, never go silent, ask for repeats, stay consistent with the README and reports, agree-then-evidence when challenged. Added a say-it-like-this table for IDs, numbers, file names and terms. Converted every ID and field name in the spoken answers to speakable words (case 34, account 5684, the audit time) and capitalized sentence starts. Facts are unchanged; the previous version is backed up in the scratchpad.
+
+Actions:
+* Backed up the notes; scripted, count-checked replacements; regex pass for speakable IDs; checked for leftovers (none)
+
+Context:
+tool=Claude Code
+model=claude-opus-5-5
+branch=main
+repo_root=/home/paritosh/Desktop/Projects/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
