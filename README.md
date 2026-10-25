@@ -1,5 +1,11 @@
 # Ghost Data Still Exists: deletion-audit agent
 
+> Built during the 24-hour [HackerRank Orchestrate](https://www.hackerrank.com/hackerrank-orchestrate-october26)
+> hackathon (October 2026), challenge *Ghost Data Still Exists*, with Claude Code as the coding
+> agent. Leaderboard score at the time of writing: **74.1 / 100** (chat transcript 7.5 / 10, AI
+> interview 24.0 / 30, output 25.2 / 30, code 17.4 / 30); final results are announced after the
+> event.
+
 For every request in `dataset/deletion_requests.csv`, this agent:
 
 1. decides whether the person actually asked for deletion;
@@ -18,7 +24,9 @@ identity resolution, linking, state reconstruction, policy, ordering and citatio
 reliably. Its answers are merged under fixed guardrails. Without an API key the same pipeline runs
 fully deterministically.
 
-The challenge contract is in `problem_statement.md` and `AGENTS.md` in the challenge repository.
+The challenge statement and contract come from HackerRank's starter repository and are kept here as
+provided: [`problem_statement.md`](problem_statement.md), [`AGENTS.md`](AGENTS.md) and the
+participant dataset in `dataset/`.
 
 ## Results at a glance
 
@@ -278,8 +286,10 @@ Code applies the review under rules that a manipulated answer cannot get around
   is cached by input hash and a re-run replays it exactly. Output is sorted and serialized
   deterministically.
 - **Provider.** DeepSeek `deepseek-flash` was chosen for cost: $0.0006 per request off-peak, with
-  JSON-mode output and vision. An Anthropic backend is implemented behind the same interface
-  (structured outputs, prompt caching) but was not exercised in our runs.
+  JSON-mode output and vision. An Anthropic backend sits behind the same interface (structured
+  outputs, prompt caching). After the submission it was run with Claude Opus 5.5 on all 518
+  requests: 0 failed calls and an `output.csv` byte-identical to the DeepSeek run, at about 20 times
+  the cost ($6.66 against $0.33 for the reviews).
 
 ## Evaluation and usage reports
 
@@ -340,9 +350,10 @@ Code applies the review under rules that a manipulated answer cannot get around
   attachment visible only in a screenshot) and 0 of 32 samples. Code now tells attachments from
   messages on its own (8 eval records). The model agreed with the rule classifier on intent in all
   518 cases. Its measured value is on non-English negations and injected instructions (custom
-  cases) and on reading screenshots.
-- **Reproducing the exact output needs the local response cache, which `code.zip` does not
-  include.** A fresh run asks the model again (about $0.35 and an estimated 7 minutes with 8 calls
+  cases) and on reading screenshots. A stronger model does not move the output either: Claude
+  Opus 5.5 produced the same file. The remaining gaps are in the evidence, not the model.
+- **Reproducing the exact output needs the local response cache, which is not in this repository
+  or in `code.zip`.** A fresh run asks the model again (about $0.35 and an estimated 7 minutes with 8 calls
   in flight), and its answers can differ where the model reads a screenshot or a request
   differently.
 - **Interpretation choices the samples do not settle** are encoded as `AuditPolicy` flags or plain
@@ -353,6 +364,18 @@ Code applies the review under rules that a manipulated answer cannot get around
     `audit_at`; for identity, the information's own timestamp decides;
   - when several observations prove the same state, the latest is cited;
   - with no record established, the workflow's claim decides the status.
+
+## What else is in this repository
+
+| Path | What it is |
+|---|---|
+| `problem_statement.md`, `AGENTS.md`, `agent_trace_instructions.md`, `dataset/` | The challenge, as provided in HackerRank's starter repository. |
+| `CLAUDE.md` | The working rules I gave the coding agent: grading priorities, how design decisions were made, and the problem spec as it evolved. |
+| `log.txt` | The chat transcript submitted for grading: each prompt I gave the coding agent, with a summary of the turn. |
+| `output.csv`, `review_queue.csv` | The submitted predictions for the 518 requests, and the calls a person should review. |
+
+Not in the repository (git-ignored): `.env` with the API keys, the `.cache/` response cache and
+evaluation runs, and the submission archives.
 
 ## Repository layout
 
@@ -385,7 +408,7 @@ code/
 └── tests/                      25 offline unit tests
 ```
 
-## Packaging `code.zip`
+## Packaging `code.zip` (challenge submission)
 
 From the repository root (the archive holds `README.md` and `code/`, never `dataset/`, `.env`,
 `.cache/` or the virtual environment):
